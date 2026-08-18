@@ -150,6 +150,19 @@ The user is learning professional engineering, not collecting code.
 10. End meaningful units of work with a few questions the user should be able
     to answer before moving on.
 
+## Known gotchas (hit and solved — don't re-debug these)
+
+**Windows + psycopg async.** Windows defaults to `ProactorEventLoop`, which
+psycopg's async mode refuses to use — it fails with `InterfaceError: Psycopg
+cannot use the 'ProactorEventLoop'`, buried under ~100 lines of SQLAlchemy
+pool internals. Fixed by `configure_event_loop_policy()` in
+`app/core/compat.py`, called from `app/__init__.py` so it applies before any
+loop exists. **Never create an engine or session outside the `app.*` package**,
+or the shim won't have run.
+
+**Reading long tracebacks.** Start at the bottom for *what* failed, then scan
+up for the first line in our own code. The middle is library plumbing.
+
 ## Claude must NOT
 
 - Run `docker compose down -v`, `git push --force`, or `git reset --hard` without explicit approval
