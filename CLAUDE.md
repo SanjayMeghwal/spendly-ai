@@ -51,8 +51,12 @@ pydantic-settings · uv
 | **psycopg 3**, not psycopg2 | Supports both sync and async |
 | Line endings normalized to **LF** via `.gitattributes` | CRLF breaks scripts inside Linux containers |
 | `models/` (SQLAlchemy) kept separate from `schemas/` (Pydantic) | What we store ≠ what we expose; prevents leaking password hashes |
+| **Async SQLAlchemy**, not sync | The AI milestones are I/O-bound (LLM calls take seconds); sync→async migration later would touch every DB file |
 
-**Still open:** sync vs. async SQLAlchemy — decide when writing `db/session.py`.
+⚠️ **Async consequence — always eager-load relationships.** Accessing an
+unloaded relationship (`user.transactions`) outside an active async context
+raises `MissingGreenlet`. Use `selectinload()` / `joinedload()` explicitly.
+Lazy loading is not available to us.
 
 ---
 
