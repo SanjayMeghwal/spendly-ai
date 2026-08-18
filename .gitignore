@@ -1,0 +1,88 @@
+# ==============================================================================
+# Spendly AI - .gitignore
+#
+# Rule of thumb: commit what humans write; ignore what machines generate,
+# what is machine-specific, and what is secret.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Secrets - NEVER commit these. This repo is public.
+# `.env.example` IS committed (it documents the required keys with fake values).
+# ------------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# ------------------------------------------------------------------------------
+# Python
+# ------------------------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+
+# ------------------------------------------------------------------------------
+# Node / Frontend (added in Milestone 3)
+# ------------------------------------------------------------------------------
+node_modules/
+.vite/
+*.local
+
+# Vite/React build output
+frontend/dist/
+
+# ------------------------------------------------------------------------------
+# Databases & data
+# Local DB dumps and CSV fixtures can contain real financial data.
+# ------------------------------------------------------------------------------
+*.sqlite3
+*.db
+*.dump
+data/local/
+
+# ------------------------------------------------------------------------------
+# Logs
+# ------------------------------------------------------------------------------
+*.log
+logs/
+
+# ------------------------------------------------------------------------------
+# Editors & OS
+# ------------------------------------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ------------------------------------------------------------------------------
+# Claude Code
+# Project-level config (rules, agents, skills) IS committed - it is shared
+# project knowledge. Personal permission grants are not.
+# ------------------------------------------------------------------------------
+.claude/settings.local.json

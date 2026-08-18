@@ -1,0 +1,54 @@
+# ==============================================================================
+# Spendly AI - .gitattributes
+#
+# WHY THIS FILE EXISTS:
+# Windows ends lines with CRLF (\r\n); Linux uses LF (\n). Our Docker
+# containers run Linux. A shell script checked out with CRLF endings fails
+# inside a container with the infamous and misleading error:
+#     exec ./script.sh: no such file or directory
+# ...because Linux treats the trailing \r as part of the filename.
+#
+# This file normalizes line endings for EVERY contributor on EVERY OS,
+# because it lives in the repo. A per-machine `core.autocrlf` setting does
+# not travel with the code and only protects the person who configured it.
+# ==============================================================================
+
+# Default: treat as text, store LF in the repository, check out LF.
+* text=auto eol=lf
+
+# ------------------------------------------------------------------------------
+# Files that MUST be LF (executed inside Linux containers)
+# ------------------------------------------------------------------------------
+*.sh            text eol=lf
+*.bash          text eol=lf
+Dockerfile      text eol=lf
+Dockerfile.*    text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+.env.example    text eol=lf
+
+# ------------------------------------------------------------------------------
+# Files that MUST be CRLF (Windows batch interpreters require it)
+# ------------------------------------------------------------------------------
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# ------------------------------------------------------------------------------
+# Binary files - never modify, never diff as text
+# ------------------------------------------------------------------------------
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.woff          binary
+*.woff2         binary
+*.zip           binary
+*.gz            binary
+
+# ------------------------------------------------------------------------------
+# Lock files: collapse diffs in code review (generated, not hand-edited)
+# ------------------------------------------------------------------------------
+uv.lock             linguist-generated=true
+package-lock.json   linguist-generated=true
