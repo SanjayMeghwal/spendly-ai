@@ -82,9 +82,23 @@ ignore = [
     "E501",  # line length - the formatter already handles this
 ]
 
+[tool.ruff.lint.isort]
+# Without this, ruff sees the local `alembic/` directory and classifies the
+# `alembic` package as first-party, then demands it be separated from other
+# third-party imports. It is a third-party library that merely shares a name
+# with our migrations folder.
+known-third-party = ["alembic"]
+
 [tool.ruff.lint.per-file-ignores]
 # Tests may use assert and fixture shadowing freely
 "tests/**/*.py" = ["S101"]
+# Alembic generates migrations from a mako template. Two artifacts of that
+# templating cannot be fixed in the template itself:
+#   F401 - `sqlalchemy as sa` is imported whether or not a migration uses it
+#   W291 - `Revises: ${down_revision}` leaves a trailing space when a
+#          migration has no parent (the first one)
+# Real problems in migration bodies are still linted; only these are exempt.
+"alembic/versions/*.py" = ["F401", "W291", "E501"]
 
 # ------------------------------------------------------------------------------
 # Mypy - static type checking
