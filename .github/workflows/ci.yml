@@ -1,0 +1,105 @@
+name: CI
+
+# Runs on every pull request, and on pushes to main (which catches anything
+# merged without a PR). Feature-branch pushes are covered by their PR, so
+# building them separately would double the work for no extra signal.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel an in-progress run when new commits are pushed to the same branch.
+# Without this, pushing three fixes in a minute queues three full runs and you
+# wait on results for code you have already replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend checks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    # --------------------------------------------------------------------------
+    # Service container
+    #
+    # GitHub starts this alongside the job and tears it down afterwards. The
+    # image is IDENTICAL to the one docker-compose.yml runs locally, so CI
+    # exercises the same PostgreSQL 17 and the same pgvector build. That
+    # equivalence is the reason the database was containerised on day one.
+    #
+    # About these credentials: they are NOT a secret and do not belong in
+    # GitHub Secrets. This database exists for ~2 minutes inside an isolated
+    # runner, is reachable only from this job, and is destroyed with it. Real
+    # secrets - production database URLs, API keys, signing keys - go in
+    # repository secrets and are referenced as ${{ secrets.NAME }}.
+    # --------------------------------------------------------------------------
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: spendly
+          POSTGRES_PASSWORD: ci_ephemeral_password
+          POSTGRES_DB: spendly_test
+        ports:
+          # Port 5432 here, not the 5433 used locally. 5433 exists only to
+          # avoid a clash with a developer's native PostgreSQL install; a
+          # clean runner has no such conflict.
+          - 5432:5432
+        # The job must not start querying before PostgreSQL can answer.
+        # Without this, the first test races the database's startup and fails
+        # intermittently - the worst kind of CI failure, because it looks like
+        # a flaky test rather than a missing wait.
+        options: >-
+          --health-cmd "pg_isready -U spendly -d spendly_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://spendly:ci_ephemeral_password@localhost:5432/spendly_test
+      ENVIRONMENT: test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          # Cache the resolved dependency set, keyed on the lock file. A miss
+          # costs ~20s of downloads; a hit costs almost nothing.
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        # --locked fails if uv.lock is missing or out of date with
+        # pyproject.toml, rather than silently resolving something different
+        # from what was tested locally. This is what makes the lock file a
+        # guarantee instead of a suggestion.
+        run: uv sync --locked
+
+      # Checks are ordered cheapest-first so an obvious problem fails in
+      # seconds rather than after the full suite has run.
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+
+      - name: Type check (mypy)
+        run: uv run mypy app/
+
+      - name: Apply migrations
+        # Runs the real migration chain against an empty database, which
+        # verifies something tests alone do not: that migrations actually
+        # apply from scratch. A migration that only works against a developer's
+        # existing database is broken and would not be caught otherwise.
+        run: uv run alembic upgrade head
+
+      - name: Tests
+        run: uv run pytest --cov=app --cov-report=term-missing
