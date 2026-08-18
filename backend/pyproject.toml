@@ -82,6 +82,25 @@ ignore = [
     "E501",  # line length - the formatter already handles this
 ]
 
+# ------------------------------------------------------------------------------
+# Coverage
+#
+# `concurrency` matters here. SQLAlchemy's async layer runs database calls
+# inside greenlets, and coverage.py does not trace greenlet-switched code
+# unless told to. Without this, lines that execute AFTER an awaited query are
+# reported as uncovered - which quietly understates coverage and, worse,
+# makes the report untrustworthy exactly where the interesting code is.
+# ------------------------------------------------------------------------------
+[tool.coverage.run]
+source = ["app"]
+concurrency = ["thread", "greenlet"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
 [tool.ruff.lint.isort]
 # Without this, ruff sees the local `alembic/` directory and classifies the
 # `alembic` package as first-party, then demands it be separated from other
@@ -130,3 +149,11 @@ addopts = [
 markers = [
     "integration: tests that require a running database",
 ]
+# "auto" treats every `async def test_*` as an asyncio test, so individual
+# @pytest.mark.asyncio decorators are unnecessary. With the default "strict"
+# mode, forgetting the decorator makes a test silently pass without ever
+# running - a genuinely dangerous failure mode.
+asyncio_mode = "auto"
+# Fixtures live for one test function unless declared otherwise, keeping test
+# isolation the default rather than something to remember.
+asyncio_default_fixture_loop_scope = "function"

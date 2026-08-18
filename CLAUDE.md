@@ -126,6 +126,22 @@ db/        Engine, session, base.
 - Index foreign keys and columns used in `WHERE` / `ORDER BY`
 - Every user-owned table filters by `user_id` — a query without it is a data leak
 
+**Testing**
+- Tests run against the **real PostgreSQL container**, never SQLite or a mocked
+  session. SQLite has no true `DECIMAL` (money would become floating point),
+  no `TIMESTAMPTZ`/`JSONB`, and foreign keys off by default — a green suite
+  proving code works against a database we don't deploy.
+- Mock only what is slow, external, non-deterministic, or costs money
+  (third-party APIs, email, LLM calls). Never our own database.
+- `asyncio_mode = "auto"` — plain `async def test_*` works; no decorator needed.
+- Mark tests needing a live database `@pytest.mark.integration`.
+- **A new test must be seen to fail.** Break the code deliberately, confirm the
+  right test fails, restore. A test that cannot fail is worse than no test —
+  it grants false confidence.
+- Coverage requires `concurrency = ["thread", "greenlet"]`; SQLAlchemy's async
+  layer runs queries in greenlets and coverage silently under-reports without
+  it. Treat a surprising coverage number as a possible tooling bug.
+
 **API**
 - Pydantic models for every request and response; never return an ORM object directly
 - Correct status codes: 200/201/204, 400/401/403/404/409/422
