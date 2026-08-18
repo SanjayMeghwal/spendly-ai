@@ -1,0 +1,61 @@
+# ==============================================================================
+# Spendly AI - Local development infrastructure
+#
+# Usage:
+#   docker compose up -d        start services in the background
+#   docker compose ps           show status and health
+#   docker compose logs -f db   follow database logs
+#   docker compose down         stop containers, KEEP data
+#   docker compose down -v      stop containers and DESTROY the data volume
+#
+# WARNING: `down -v` permanently deletes the database. It is not recoverable.
+#
+# Note: the top-level `version:` key is obsolete in modern Docker Compose
+# and is intentionally omitted.
+# ==============================================================================
+
+services:
+  db:
+    # Official pgvector image built on PostgreSQL 17.
+    # Using this prebuilt image is why we chose Docker over the native
+    # Windows Postgres install: pgvector ships compiled, so the RAG milestone
+    # does not require Visual Studio Build Tools.
+    image: pgvector/pgvector:pg17
+    container_name: spendly-db
+    restart: unless-stopped
+
+    environment:
+      # These are read from the .env file sitting next to this compose file.
+      # .env is gitignored; .env.example documents the required keys.
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required - copy .env.example to .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      # Fail fast on bad data rather than silently accepting it
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+
+    ports:
+      # HOST:CONTAINER
+      # Host port 5433 because the machine's native PostgreSQL 17 already
+      # holds 5432. The container still uses the standard 5432 internally.
+      - "${POSTGRES_PORT:-5433}:5432"
+
+    volumes:
+      # Named volume => data survives `docker compose down` and container
+      # rebuilds. Without this, every restart would wipe the database.
+      - spendly_pgdata:/var/lib/postgresql/data
+
+    healthcheck:
+      # Postgres accepts TCP connections shortly BEFORE it can serve queries.
+      # This reports "healthy" only when it can genuinely answer, so services
+      # that depend on it can wait correctly.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  # Declaring the volume here makes Docker manage its lifecycle by name
+  # (spendly_pgdata) rather than tying it to a host path.
+  spendly_pgdata:
+    name: spendly_pgdata

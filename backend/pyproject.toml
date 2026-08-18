@@ -1,0 +1,119 @@
+# ==============================================================================
+# Spendly AI - Backend project definition
+#
+# This file declares WHAT we depend on (loose constraints) and how our tools
+# are configured. `uv.lock` records the EXACT resolved versions and is what
+# guarantees reproducible installs. Edit this file; never edit uv.lock.
+# ==============================================================================
+
+[project]
+name = "spendly-backend"
+version = "0.1.0"
+description = "Spendly AI - AI-powered personal finance platform (backend)"
+readme = "../README.md"
+requires-python = ">=3.12,<3.13"
+
+# ------------------------------------------------------------------------------
+# Runtime dependencies.
+# Every entry needs a justification. Milestone 1 only - auth and AI packages
+# arrive with the milestones that need them.
+# ------------------------------------------------------------------------------
+dependencies = [
+    # Web framework + ASGI server
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+
+    # Database: ORM, migrations, driver
+    # psycopg 3 speaks both sync and async, so the session strategy stays open.
+    "sqlalchemy>=2.0.36",
+    "alembic>=1.14.0",
+    "psycopg[binary]>=3.2.3",
+
+    # Configuration: validate environment variables at startup, not at 3am
+    "pydantic-settings>=2.6.0",
+]
+
+# ------------------------------------------------------------------------------
+# Development dependencies (uv's dependency-group standard).
+# Installed locally and in CI, never shipped in the production image.
+# ------------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.28.0",       # required by FastAPI's TestClient
+    "ruff>=0.8.0",         # linter + formatter (replaces flake8/black/isort)
+    "mypy>=1.13.0",        # static type checker
+]
+
+# ==============================================================================
+# Tool configuration
+# Keeping this in pyproject.toml (rather than .flake8, setup.cfg, mypy.ini,
+# pytest.ini, ...) means one config file instead of five.
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# uv
+# This backend is an APPLICATION we run, not a LIBRARY anyone installs.
+# `package = false` tells uv to manage the venv and dependencies without
+# trying to build/install this project itself.
+# ------------------------------------------------------------------------------
+[tool.uv]
+package = false
+
+# ------------------------------------------------------------------------------
+# Ruff - linting and formatting
+# ------------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (unused imports, undefined names)
+    "I",    # isort (import ordering)
+    "B",    # flake8-bugbear (likely bugs)
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade (modern Python idioms)
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",  # line length - the formatter already handles this
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may use assert and fixture shadowing freely
+"tests/**/*.py" = ["S101"]
+
+# ------------------------------------------------------------------------------
+# Mypy - static type checking
+# Strict-ish from day one. Retrofitting types onto an untyped codebase is
+# painful; starting typed costs almost nothing.
+# ------------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Third-party packages without type stubs
+module = ["alembic.*"]
+ignore_missing_imports = true
+
+# ------------------------------------------------------------------------------
+# Pytest
+# ------------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "-v",
+    "--strict-markers",     # typo'd marker names fail instead of silently passing
+    "--strict-config",
+]
+markers = [
+    "integration: tests that require a running database",
+]
