@@ -48,7 +48,7 @@ pydantic-settings · uv
 | **Postgres in Docker**, not the host's native install | pgvector ships precompiled; building it on Windows needs VS Build Tools |
 | **Host port 5433**, not 5432 | The host's native PostgreSQL already binds 5432 |
 | **uv + `pyproject.toml` + `uv.lock`**, not pip + requirements.txt | Reproducible installs; lock file pins all transitive deps |
-| **psycopg 3**, not psycopg2 | Supports both sync and async |
+| **asyncpg** driver, not psycopg | psycopg's async mode refuses to run on Windows' `ProactorEventLoop`, which uvicorn installs itself — overriding any policy the app sets. asyncpg works on every platform. See gotchas. |
 | Line endings normalized to **LF** via `.gitattributes` | CRLF breaks scripts inside Linux containers |
 | `models/` (SQLAlchemy) kept separate from `schemas/` (Pydantic) | What we store ≠ what we expose; prevents leaking password hashes |
 | **Async SQLAlchemy**, not sync | The AI milestones are I/O-bound (LLM calls take seconds); sync→async migration later would touch every DB file |
@@ -152,13 +152,15 @@ The user is learning professional engineering, not collecting code.
 
 ## Known gotchas (hit and solved — don't re-debug these)
 
-**Windows + psycopg async.** Windows defaults to `ProactorEventLoop`, which
-psycopg's async mode refuses to use — it fails with `InterfaceError: Psycopg
-cannot use the 'ProactorEventLoop'`, buried under ~100 lines of SQLAlchemy
-pool internals. Fixed by `configure_event_loop_policy()` in
-`app/core/compat.py`, called from `app/__init__.py` so it applies before any
-loop exists. **Never create an engine or session outside the `app.*` package**,
-or the shim won't have run.
+**Windows + psycopg async — why we use asyncpg.** psycopg's async mode raises
+`InterfaceError: Psycopg cannot use the 'ProactorEventLoop'` on Windows,
+buried under ~100 lines of SQLAlchemy pool internals. Setting
+`WindowsSelectorEventLoopPolicy` does **not** fix it under uvicorn: uvicorn
+installs its own Proactor loop *after* importing the app, overwriting the
+policy. Verified empirically — the app imported with a Selector policy set and
+still ran on `ProactorEventLoop`. Resolved by switching the driver to asyncpg,
+which works on both loop types. **Do not reintroduce psycopg as the async
+driver.**
 
 **Reading long tracebacks.** Start at the bottom for *what* failed, then scan
 up for the first line in our own code. The middle is library plumbing.

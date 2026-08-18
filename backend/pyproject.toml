@@ -26,9 +26,9 @@ dependencies = [
     # psycopg 3 speaks both sync and async, so the session strategy stays open.
     "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14.0",
-    "psycopg[binary]>=3.2.3",
     # Configuration: validate environment variables at startup, not at 3am
     "pydantic-settings>=2.6.0",
+    "asyncpg>=0.31.0",
 ]
 
 # ------------------------------------------------------------------------------
