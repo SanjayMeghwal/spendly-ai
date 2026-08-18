@@ -6,7 +6,8 @@ and goals, and get financial insight from a locally-hosted LLM.
 Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
-> **Status: early development.** Milestone 1 (walking skeleton) is in progress.
+> **Status: early development.** Milestone 1 (walking skeleton) is complete —
+> the API, database, migrations, tests, and CI pipeline all run end to end.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -31,10 +32,10 @@ Every dependency is open-source and free to run locally. No paid APIs.
 |---|---|
 | Project scaffolding & tooling | ✅ Done |
 | PostgreSQL + pgvector container | ✅ Done |
-| FastAPI app + `/health` endpoint | 🚧 In progress |
-| Database migrations (Alembic) | 🚧 In progress |
-| CI pipeline | 🚧 In progress |
-| Authentication & user profiles | ⬜ Planned |
+| FastAPI app + liveness/readiness probes | ✅ Done |
+| Database migrations (Alembic) | ✅ Done |
+| CI pipeline (lint, types, migrations, tests) | ✅ Done |
+| Authentication & user profiles | 🚧 Next |
 | Income & expense tracking | ⬜ Planned |
 | Categories, budgets, goals | ⬜ Planned |
 | Dashboard & analytics | ⬜ Planned |
