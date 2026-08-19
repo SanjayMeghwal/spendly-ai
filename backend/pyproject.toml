@@ -33,6 +33,11 @@ dependencies = [
     "asyncpg>=0.31.0",
     # Configuration: validate environment variables at startup, not at 3am
     "pydantic-settings>=2.6.0",
+    # Password hashing. Argon2id is OWASP's first recommendation and won the
+    # 2015 Password Hashing Competition. Used directly rather than through
+    # passlib, which has had no release since 2020 and breaks against modern
+    # bcrypt - the FastAPI tutorial still shows it, and it should not.
+    "argon2-cffi>=23.1.0",
 ]
 
 # ------------------------------------------------------------------------------
