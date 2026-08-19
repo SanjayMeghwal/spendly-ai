@@ -23,12 +23,16 @@ dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
     # Database: ORM, migrations, driver
-    # psycopg 3 speaks both sync and async, so the session strategy stays open.
+    # The [asyncio] extra pulls in greenlet, which is what lets SQLAlchemy's
+    # synchronous internals run under async without rewriting them.
     "sqlalchemy[asyncio]>=2.0.36",
     "alembic>=1.14.0",
+    # asyncpg, not psycopg. psycopg's async mode refuses to run on Windows'
+    # ProactorEventLoop, which uvicorn installs after importing the app -
+    # overriding any loop policy the app sets. See CLAUDE.md "Known gotchas".
+    "asyncpg>=0.31.0",
     # Configuration: validate environment variables at startup, not at 3am
     "pydantic-settings>=2.6.0",
-    "asyncpg>=0.31.0",
 ]
 
 # ------------------------------------------------------------------------------
