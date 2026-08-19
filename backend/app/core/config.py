@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import PostgresDsn
+from pydantic import PostgresDsn, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # `.env` lives at the repository root, but the app runs from `backend/`.
@@ -55,6 +55,58 @@ class Settings(BaseSettings):
     # malformed URL is rejected here, not by SQLAlchemy three layers deep.
     # No default: this MUST be provided, and its absence must be an error.
     DATABASE_URL: PostgresDsn
+
+    # --- Authentication -------------------------------------------------------
+    # The key that signs every JWT. NO DEFAULT, deliberately.
+    #
+    # A fallback value here would be the single most dangerous line in the
+    # codebase: this file is committed to a PUBLIC repository, so a default
+    # would be a published signing key. Anyone could mint a token for any
+    # user. Every real breach of this kind started as a convenient default
+    # that nobody remembered to override in production.
+    #
+    # SecretStr keeps it out of logs and tracebacks: repr(settings) renders it
+    # as SecretStr('**********') rather than the key itself. Reading it needs
+    # an explicit .get_secret_value().
+    SECRET_KEY: SecretStr
+
+    # HS256 is symmetric: the same key signs and verifies. That is correct
+    # while one application does both. If a separate service ever needs to
+    # VERIFY tokens without being able to MINT them, this must become RS256 -
+    # asymmetric, so the verifier holds only the public key.
+    JWT_ALGORITHM: str = "HS256"
+
+    # Access tokens cannot be revoked - nothing is stored to revoke against -
+    # so this value IS the exposure window for a stolen token. Short enough to
+    # limit damage, long enough not to interrupt people constantly.
+    # Shortening it further is what the refresh-token slice buys us.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    @field_validator("SECRET_KEY")
+    @classmethod
+    def secret_key_must_be_strong(cls, value: SecretStr) -> SecretStr:
+        """Reject a key short enough to brute-force offline.
+
+        An HS256 signature is only as strong as its key. Given any token we
+        issue, an attacker can try candidate keys offline at full speed until
+        one reproduces the signature - no network, no rate limit, no logs.
+        A short or guessable key means they can then forge a token for ANY
+        user, and it will verify perfectly.
+
+        32 bytes matches the HMAC-SHA256 output size; beyond that, extra
+        length adds nothing. Generate one with:
+
+            python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+        This runs at STARTUP, so a weak key stops the process rather than
+        silently protecting nothing.
+        """
+        if len(value.get_secret_value()) < 32:
+            raise ValueError(
+                "SECRET_KEY must be at least 32 characters. Generate one with: "
+                'python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            )
+        return value
 
     @property
     def database_url(self) -> str:

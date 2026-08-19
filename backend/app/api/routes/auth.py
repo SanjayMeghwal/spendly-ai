@@ -7,8 +7,12 @@ into responses. No business logic lives here - see app/services/user.py.
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import DbSession
+from app.core.config import get_settings
+from app.core.tokens import create_access_token
 from app.models import User
+from app.schemas.auth import LoginRequest, TokenResponse
 from app.schemas.user import UserCreate, UserRead
+from app.services.auth import InactiveUser, InvalidCredentials, authenticate_user
 from app.services.user import EmailAlreadyRegistered, create_user
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
@@ -72,3 +76,69 @@ async def register(payload: UserCreate, db: DbSession) -> User:
             status_code=status.HTTP_409_CONFLICT,
             detail="An account with this email address already exists.",
         ) from None
+
+
+@router.post(
+    "/login",
+    # 200, not 201. Logging in creates no resource - it exchanges credentials
+    # for a token. The token is not a thing at a URL that can be fetched again.
+    status_code=status.HTTP_200_OK,
+    response_model=TokenResponse,
+    summary="Exchange credentials for an access token",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Invalid email or password."},
+        status.HTTP_403_FORBIDDEN: {"description": "Account is deactivated."},
+    },
+)
+async def login(credentials: LoginRequest, db: DbSession) -> TokenResponse:
+    """Authenticate and issue an access token.
+
+    ONE ERROR MESSAGE FOR BOTH FAILURE MODES.
+
+    An unknown email and a wrong password both return exactly the same 401
+    with exactly the same body. Saying "no account with that email" would
+    confirm which addresses are registered here, letting an attacker turn a
+    list of emails into a list of customers - sensitive on its own for a
+    finance product, and the first half of a credential-stuffing run.
+
+    The service also equalises the TIMING of the two paths, since a response
+    that arrives 60x faster leaks the same fact the message would have. See
+    dummy_verify in app/core/security.py.
+
+    This is the opposite call from /register, which does return a distinct
+    409, and the difference is deliberate: there, hiding the fact would need
+    transactional email we do not have, so the disclosure is accepted
+    consciously. Here, hiding it is free.
+
+    403 for a deactivated account is safe to distinguish, because it is only
+    reachable AFTER the password has been verified. Someone who has proved
+    they own the account learns nothing new, and answering "invalid
+    credentials" would send them into a password-reset loop that cannot help.
+    """
+    try:
+        user = await authenticate_user(
+            db,
+            email=credentials.email,
+            password=credentials.password.get_secret_value(),
+        )
+    except InvalidCredentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            # Identical for both causes - see the docstring.
+            detail="Incorrect email or password.",
+            # RFC 6750 requires this header on a 401 from a bearer-token
+            # endpoint. It tells a client HOW to authenticate rather than
+            # leaving it to guess.
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from None
+    except InactiveUser:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated.",
+        ) from None
+
+    settings = get_settings()
+    return TokenResponse(
+        access_token=create_access_token(user.id),
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
