@@ -9,9 +9,11 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
 from app import __version__
-from app.api.routes import health
+from app.api.errors import validation_exception_handler
+from app.api.routes import auth, health
 from app.core.config import get_settings
 from app.db.session import engine
 
@@ -63,3 +65,13 @@ app = FastAPI(
 # versions. Business endpoints will be mounted under settings.API_V1_PREFIX so
 # that a future /api/v2 can ship without breaking existing clients.
 app.include_router(health.router)
+
+# Business endpoints live under /api/v1 so that a future /api/v2 can ship
+# without breaking existing clients.
+app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
+
+# Replaces FastAPI's default 422 handler, which serialises pydantic's error
+# list verbatim - including an "input" key holding the REJECTED VALUE. For a
+# rejected password that means echoing the plaintext back to the client and
+# into every log that records response bodies. See app/api/errors.py.
+app.add_exception_handler(RequestValidationError, validation_exception_handler)

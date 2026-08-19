@@ -145,3 +145,32 @@ async def db_session(db_engine: AsyncEngine) -> AsyncGenerator[AsyncSession, Non
         finally:
             await session.close()
             await transaction.rollback()
+
+
+@pytest.fixture
+async def db_client(
+    client: AsyncClient, db_session: AsyncSession
+) -> AsyncGenerator[AsyncClient, None]:
+    """An HTTP client whose requests share the rolled-back test session.
+
+    The plain `client` fixture lets handlers use the real `get_db`, which
+    commits to the development database for keeps. That is fine for the
+    readiness probe, which only reads - but a registration test would leave a
+    user behind, and the next run would fail on a duplicate email.
+
+    Overriding `get_db` to yield the test's session means the handler writes
+    inside the same outer transaction the fixture rolls back. Handler code
+    still calls `commit()` and still sees constraints fire; the writes simply
+    never survive the test.
+
+    This works because the handler takes its session via Depends. A module
+    that imported a session factory directly could not be redirected like
+    this - which is the practical reason for the dependency.
+    """
+
+    async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
+        yield db_session
+
+    fastapi_app.dependency_overrides[get_db] = override_get_db
+    yield client
+    fastapi_app.dependency_overrides.pop(get_db, None)

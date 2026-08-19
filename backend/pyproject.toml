@@ -33,6 +33,10 @@ dependencies = [
     "asyncpg>=0.31.0",
     # Configuration: validate environment variables at startup, not at 3am
     "pydantic-settings>=2.6.0",
+    # Backs pydantic's EmailStr. Validating an address by regex is famously
+    # wrong - the grammar in RFC 5322 is not regular - so this delegates to a
+    # maintained implementation rather than to a clever pattern.
+    "email-validator>=2.2.0",
     # Password hashing. Argon2id is OWASP's first recommendation and won the
     # 2015 Password Hashing Competition. Used directly rather than through
     # passlib, which has had no release since 2020 and breaks against modern

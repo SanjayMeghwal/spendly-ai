@@ -105,11 +105,19 @@ class TestApiSurface:
 
         A route accidentally exposed is a security problem; a route
         accidentally removed breaks clients. Either shows up here.
+
+        This list is meant to be edited - but only deliberately, in the same
+        commit that adds the route. It failed exactly as intended when
+        /api/v1/auth/register was mounted, which is the test doing its job.
         """
         response = await client.get("/openapi.json")
 
         assert response.status_code == 200
-        assert set(response.json()["paths"]) == {"/health", "/health/ready"}
+        assert set(response.json()["paths"]) == {
+            "/health",
+            "/health/ready",
+            "/api/v1/auth/register",
+        }
 
     async def test_docs_are_available_outside_production(self, client: AsyncClient) -> None:
         """Interactive docs are enabled in local and test environments only."""
