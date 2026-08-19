@@ -20,9 +20,6 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from app.core.config import get_settings
-from app.db.base import Base
-
 # ------------------------------------------------------------------------------
 # IMPORTANT - autogenerate only sees models that have been IMPORTED.
 #
@@ -32,10 +29,17 @@ from app.db.base import Base
 # Alembic's point of view the table exists in the database but not in the
 # models.
 #
-# There are no models yet. When app/models/ gains its first module, import it
-# here (or import an aggregating module) BEFORE generating any migration.
+# `app.models` imports every model module, so this single line keeps every
+# table visible to autogenerate. Adding a new model means adding it to
+# app/models/__init__.py, not editing this file again.
+#
+# noqa: F401 - the import is never referenced by name. It exists purely for
+# its side effect of registering models on Base.metadata, which is exactly
+# the kind of import a linter is right to be suspicious of.
 # ------------------------------------------------------------------------------
-# from app import models  # noqa: F401
+from app import models  # noqa: F401
+from app.core.config import get_settings
+from app.db.base import Base
 
 config = context.config
 
