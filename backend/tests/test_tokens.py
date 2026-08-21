@@ -44,6 +44,7 @@ def valid_claims(**overrides: object) -> dict[str, object]:
         "exp": now + timedelta(minutes=30),
         "iat": now,
         "type": ACCESS_TOKEN_TYPE,
+        "ver": 1,
     }
     claims.update(overrides)
     return claims
@@ -84,10 +85,14 @@ class TestRoundTrip:
     def test_returns_the_user_id_it_was_created_with(self) -> None:
         user_id = uuid.uuid4()
 
-        assert decode_access_token(create_access_token(user_id)) == user_id
+        assert decode_access_token(create_access_token(user_id, token_version=1)).user_id == (
+            user_id
+        )
 
     def test_two_users_get_different_tokens(self) -> None:
-        assert create_access_token(uuid.uuid4()) != create_access_token(uuid.uuid4())
+        assert create_access_token(uuid.uuid4(), token_version=1) != create_access_token(
+            uuid.uuid4(), token_version=1
+        )
 
 
 class TestPayloadIsPublic:
@@ -110,7 +115,7 @@ class TestPayloadIsPublic:
         """
         user_id = uuid.uuid4()
 
-        claims = self._decode_payload_without_the_key(create_access_token(user_id))
+        claims = self._decode_payload_without_the_key(create_access_token(user_id, token_version=1))
 
         assert claims["sub"] == str(user_id)
 
@@ -124,9 +129,11 @@ class TestPayloadIsPublic:
         This asserts an exact claim set, so ADDING a claim requires deciding,
         here, that the new value is safe to publish.
         """
-        claims = self._decode_payload_without_the_key(create_access_token(uuid.uuid4()))
+        claims = self._decode_payload_without_the_key(
+            create_access_token(uuid.uuid4(), token_version=1)
+        )
 
-        assert set(claims) == {"sub", "exp", "iat", "type"}
+        assert set(claims) == {"sub", "exp", "iat", "type", "ver"}
 
 
 class TestForgeryIsRejected:
@@ -165,7 +172,7 @@ class TestForgeryIsRejected:
         Swapping `sub` for another user's id is the obvious privilege
         escalation, and it is exactly what signing prevents.
         """
-        token = create_access_token(uuid.uuid4())
+        token = create_access_token(uuid.uuid4(), token_version=1)
         header, _, signature = token.split(".")
 
         # Built by hand with integer timestamps, because that is what actually
@@ -177,6 +184,7 @@ class TestForgeryIsRejected:
             "exp": now + 1800,
             "iat": now,
             "type": ACCESS_TOKEN_TYPE,
+            "ver": 1,
         }
         other_payload = (
             base64.urlsafe_b64encode(json.dumps(swapped_claims).encode()).rstrip(b"=").decode()
@@ -338,7 +346,7 @@ class TestTokenTypesAreNotInterchangeable:
         would stop being time-limited at all.
         """
         with pytest.raises(TokenError):
-            decode_refresh_token(create_access_token(uuid.uuid4()))
+            decode_refresh_token(create_access_token(uuid.uuid4(), token_version=1))
 
 
 class TestRefreshForgeryIsRejected:
@@ -399,3 +407,51 @@ class TestRefreshForgeryIsRejected:
     def test_rejects_malformed_input(self, garbage: str) -> None:
         with pytest.raises(TokenError):
             decode_refresh_token(garbage)
+
+
+class TestTheVersionClaim:
+    """`ver` is what makes an otherwise irrevocable token revocable.
+
+    The claim is only half the mechanism - the comparison against the user's
+    current `token_version` happens in app/api/deps.py, and is tested through
+    the endpoints in test_logout_all.py. What belongs here is that the claim
+    is carried, required, and well-formed.
+    """
+
+    def test_the_version_survives_the_round_trip(self) -> None:
+        claims = decode_access_token(create_access_token(uuid.uuid4(), token_version=7))
+
+        assert claims.token_version == 7
+
+    def test_rejects_a_token_with_no_version(self) -> None:
+        """Treating a missing claim as version 1 would be the tempting default.
+
+        It would also mean every token minted before this claim existed still
+        authenticates - and a forged token is exactly the kind that omits a
+        claim it does not know about.
+        """
+        claims = valid_claims()
+        del claims["ver"]
+
+        with pytest.raises(TokenError):
+            decode_access_token(forge(claims))
+
+    @pytest.mark.parametrize(
+        "version",
+        [
+            pytest.param("1", id="string"),
+            pytest.param(1.0, id="float"),
+            pytest.param(None, id="null"),
+            pytest.param(True, id="bool"),
+        ],
+    )
+    def test_rejects_a_version_that_is_not_an_integer(self, version: object) -> None:
+        """`True` is the interesting case.
+
+        `isinstance(True, int)` is True in Python, so a token claiming
+        `"ver": true` passes a naive type check and then compares unequal to
+        every real version - locking the user out for a reason nobody would
+        find. It is refused explicitly instead.
+        """
+        with pytest.raises(TokenError):
+            decode_access_token(forge(valid_claims(ver=version)))

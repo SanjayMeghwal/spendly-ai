@@ -45,6 +45,20 @@ ACCESS_TOKEN_TYPE = "access"
 REFRESH_TOKEN_TYPE = "refresh"
 
 
+class AccessTokenClaims(NamedTuple):
+    """What an access token asserts."""
+
+    user_id: uuid.UUID
+
+    # The `ver` claim - the value of `users.token_version` when this token was
+    # minted. An access token cannot be revoked, so this is how one is
+    # invalidated anyway: bump the column, and every token carrying an older
+    # number is refused on its next request. See app/api/deps.py, which
+    # compares the two, and app/models/user.py for why it is a counter rather
+    # than a timestamp.
+    token_version: int
+
+
 class RefreshTokenClaims(NamedTuple):
     """The two identifiers a refresh token carries.
 
@@ -73,7 +87,7 @@ class TokenError(Exception):
     """
 
 
-def create_access_token(user_id: uuid.UUID) -> str:
+def create_access_token(user_id: uuid.UUID, *, token_version: int) -> str:
     """Mint a signed access token for a user.
 
     The claims are standard (RFC 7519) rather than invented:
@@ -87,6 +101,15 @@ def create_access_token(user_id: uuid.UUID) -> str:
              `tokens_valid_after` timestamp per user and reject anything
              issued before it.
       type - ours, not standard. See ACCESS_TOKEN_TYPE above.
+      ver  - ours. The user's token_version at issue time, which is what
+             makes "log out everywhere" and "change my password" able to
+             invalidate tokens that are otherwise irrevocable.
+
+    `token_version` is keyword-only and has NO DEFAULT, deliberately. A
+    default would let a caller mint a token claiming version 1 for a user
+    whose counter has moved on - a token that is refused on its first use,
+    failing in the dependency layer rather than at the call site that got it
+    wrong. Requiring it means every caller must have loaded the user.
 
     `sub` is stringified because RFC 7519 requires it to be a string, and
     PyJWT enforces that on decode. A raw UUID object would also not be
@@ -106,6 +129,7 @@ def create_access_token(user_id: uuid.UUID) -> str:
         "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES),
         "iat": now,
         "type": ACCESS_TOKEN_TYPE,
+        "ver": token_version,
     }
 
     return jwt.encode(
@@ -228,14 +252,35 @@ def _uuid_claim(payload: dict[str, Any], name: str) -> uuid.UUID:
         raise TokenError(f"malformed {name}") from exc
 
 
-def decode_access_token(token: str) -> uuid.UUID:
-    """Verify an access token and return the user id it identifies.
+def decode_access_token(token: str) -> AccessTokenClaims:
+    """Verify an access token and return what it asserts.
+
+    THIS IS ONLY HALF OF AUTHENTICATION.
+
+    A passing return proves we signed the token and that it has not expired.
+    It does NOT prove the user still exists, is still active, or that the
+    token has not been superseded by a logout-everywhere or a password change
+    - `ver` is returned, not checked, because the value it must be compared
+    against lives in the database. app/api/deps.py does that comparison, and
+    this function must never be used for authentication without it.
+
+    `ver` is REQUIRED rather than optional. Treating a missing claim as
+    "version 1" would mean any token minted before this claim existed still
+    authenticates - and a forged token would simply omit it.
 
     Raises:
         TokenError: for every failure mode, without distinguishing them.
     """
-    payload = _decode(token, expected_type=ACCESS_TOKEN_TYPE, require=["exp", "sub"])
-    return _uuid_claim(payload, "sub")
+    payload = _decode(token, expected_type=ACCESS_TOKEN_TYPE, require=["exp", "sub", "ver"])
+
+    version = payload.get("ver")
+    if not isinstance(version, int) or isinstance(version, bool):
+        # `isinstance(True, int)` is True in Python, so a token claiming
+        # `"ver": true` would otherwise pass and then compare unequal to every
+        # real version. Refuse it here, where the reason is visible.
+        raise TokenError("malformed version")
+
+    return AccessTokenClaims(user_id=_uuid_claim(payload, "sub"), token_version=version)
 
 
 def decode_refresh_token(token: str) -> RefreshTokenClaims:

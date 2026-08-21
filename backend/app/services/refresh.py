@@ -39,6 +39,7 @@ from app.core.tokens import TokenError, create_refresh_token, decode_refresh_tok
 from app.models import RefreshToken, User
 from app.models.refresh_token import (
     REASON_LOGOUT,
+    REASON_LOGOUT_ALL,
     REASON_REUSE_DETECTED,
     REASON_ROTATED,
 )
@@ -144,6 +145,75 @@ async def revoke_family(
         )
         .values(revoked_at=datetime.now(UTC), revoked_reason=reason)
     )
+
+
+async def revoke_all_for_user(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    reason: str,
+) -> None:
+    """Revoke every live token belonging to one user, across all their sessions.
+
+    The `user_id` sibling of revoke_family: that one ends a device, this one
+    ends an account's sessions everywhere. Both leave already-revoked rows
+    untouched so the audit trail keeps the reason each token actually died of.
+
+    Does not commit - see revoke_family. This is always part of a larger
+    change (a logout-everywhere, a password change) that must land atomically
+    with it.
+    """
+    await session.execute(
+        update(RefreshToken)
+        .where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+        .values(revoked_at=datetime.now(UTC), revoked_reason=reason)
+    )
+
+
+async def log_out_everywhere(
+    session: AsyncSession,
+    user: User,
+    *,
+    reason: str = REASON_LOGOUT_ALL,
+) -> None:
+    """End every session this user has, and invalidate their access tokens too.
+
+    WHY THIS IS NOT JUST revoke_all_for_user.
+
+    Revoking refresh tokens ends the ability to mint NEW access tokens. It
+    does nothing to the ones already issued, which keep working until they
+    expire - up to ACCESS_TOKEN_EXPIRE_MINUTES of continued access to a
+    finance account somebody has just said they want locked out of.
+
+    For ordinary logout that gap is an acceptable trade. Here it is not: this
+    is what a user reaches for when they believe someone else has their
+    session, and "you are logged out everywhere, in fifteen minutes" is not an
+    answer. Bumping `token_version` closes it on the next request, because
+    every access token carries the version it was minted under.
+
+    THE INCREMENT IS DONE IN SQL, not as `user.token_version += 1`.
+
+    The Python version reads, adds, and writes - so two concurrent calls both
+    read the same value and both write the same result, and one of the two
+    bumps is silently lost. `token_version + 1` evaluated by PostgreSQL under
+    the row lock cannot lose an update. It matters here specifically because
+    both callers of this function are security actions a worried user is
+    likely to trigger twice.
+
+    Both writes commit together: a session revocation without the version bump
+    would leave access tokens alive, and a bump without the revocation would
+    leave refresh tokens able to mint new ones.
+    """
+    await revoke_all_for_user(session, user.id, reason=reason)
+
+    await session.execute(
+        update(User).where(User.id == user.id).values(token_version=User.token_version + 1)
+    )
+
+    await session.commit()
 
 
 async def log_out(session: AsyncSession, token: str) -> None:

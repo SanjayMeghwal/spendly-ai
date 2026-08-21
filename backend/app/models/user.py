@@ -9,7 +9,7 @@ rediscovered later.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, String, Uuid, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -125,6 +125,43 @@ class User(Base):
         default=True,
         server_default="true",
         doc="False disables login without destroying financial history.",
+    )
+
+    # --- Session control ------------------------------------------------------
+    # THE OFF SWITCH FOR ACCESS TOKENS.
+    #
+    # Access tokens carry no server-side state, which is what makes them cheap
+    # to verify - and also what makes them impossible to revoke. Usually that
+    # is the right trade, bounded by a 15-minute lifetime. Twice it is not:
+    # "log me out everywhere" and "I am changing my password" both mean
+    # "assume someone else has my session, NOW", and answering "in up to
+    # fifteen minutes" is not an answer.
+    #
+    # Every access token carries this number in a `ver` claim. Incrementing
+    # the column invalidates every token issued before it, in one write, with
+    # no per-token state - a counter rather than a blocklist.
+    #
+    # WHY A COUNTER AND NOT A TIMESTAMP. The obvious alternative is
+    # `tokens_valid_after`, rejecting any token whose `iat` predates it. It
+    # fails on a technicality that is easy to miss: JWT timestamps are whole
+    # SECONDS (RFC 7519 NumericDate), so a token minted in the same second as
+    # the change is ambiguous - it either survives when it should not, or dies
+    # when it should not, depending on rounding. An integer has no
+    # granularity to lose, and comparing it is exact.
+    #
+    # Costs nothing to check: the CurrentUser dependency already loads this
+    # row on every authenticated request.
+    token_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        # server_default as well as default, for the same reason as is_active:
+        # `default` only applies to rows SQLAlchemy inserts, so a row created
+        # by a migration backfill or by hand would otherwise be NULL - and a
+        # NULL here would compare unequal to every token's claim, silently
+        # locking that user out of every endpoint.
+        server_default="1",
+        doc="Incremented to invalidate every access token issued so far.",
     )
 
     # --- Timestamps -----------------------------------------------------------

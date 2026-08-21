@@ -79,7 +79,7 @@ class TestSuccessfulLogin:
 
         response = await db_client.post(LOGIN_URL, json=credentials())
 
-        assert decode_access_token(response.json()["access_token"]) == user.id
+        assert decode_access_token(response.json()["access_token"]).user_id == user.id
 
     async def test_login_is_case_insensitive_on_email(
         self, db_client: AsyncClient, db_session: AsyncSession

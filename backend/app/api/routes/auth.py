@@ -4,8 +4,6 @@ HTTP only. Routing, status codes, and the translation of domain exceptions
 into responses. No business logic lives here - see app/services/user.py.
 """
 
-import uuid
-
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession
@@ -19,6 +17,7 @@ from app.services.refresh import (
     InvalidRefreshToken,
     issue_refresh_token,
     log_out,
+    log_out_everywhere,
     rotate_refresh_token,
 )
 from app.services.user import EmailAlreadyRegistered, create_user
@@ -26,7 +25,7 @@ from app.services.user import EmailAlreadyRegistered, create_user
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
-def _issued(user_id: uuid.UUID, refresh_token: str) -> TokenResponse:
+def _issued(user: User, refresh_token: str) -> TokenResponse:
     """Build the response both /login and /refresh return.
 
     Shared so the two endpoints cannot drift. A client must not have to care
@@ -34,15 +33,15 @@ def _issued(user_id: uuid.UUID, refresh_token: str) -> TokenResponse:
     the field names, and the advertised access-token lifetime are identical,
     which is what lets client code have exactly one path for storing them.
 
-    The access token is minted here rather than in a service because it needs
-    nothing from the database: it is a pure function of the user id and the
-    signing key. The refresh token, which does need a row, is created by the
-    service and passed in.
+    Takes the USER rather than a user id because an access token now carries
+    the account's `token_version`, and the only honest source of that number
+    is the row we just loaded. Passing an id would mean either querying again
+    or guessing.
     """
     settings = get_settings()
 
     return TokenResponse(
-        access_token=create_access_token(user_id),
+        access_token=create_access_token(user.id, token_version=user.token_version),
         refresh_token=refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
@@ -187,7 +186,7 @@ async def login(credentials: LoginRequest, db: DbSession) -> TokenResponse:
     # Every other token in the system is descended from this call by rotation,
     # which is what makes "when did this session start, and from what?"
     # answerable.
-    return _issued(user.id, await issue_refresh_token(db, user.id))
+    return _issued(user, await issue_refresh_token(db, user.id))
 
 
 @router.post(
@@ -235,7 +234,7 @@ async def refresh(payload: RefreshRequest, db: DbSession) -> TokenResponse:
             detail="This account has been deactivated.",
         ) from None
 
-    return _issued(session.user.id, session.refresh_token)
+    return _issued(session.user, session.refresh_token)
 
 
 @router.post(
@@ -287,6 +286,43 @@ async def logout(payload: RefreshRequest, db: DbSession) -> None:
     both absurd and the exact moment they are most likely to try.
     """
     await log_out(db, payload.refresh_token.get_secret_value())
+
+
+@router.post(
+    "/logout-all",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="End every session on every device",
+    responses={
+        status.HTTP_204_NO_CONTENT: {"description": "Every session for this account is ended."},
+        status.HTTP_401_UNAUTHORIZED: {"description": "Missing or invalid access token."},
+        status.HTTP_403_FORBIDDEN: {"description": "Account is deactivated."},
+    },
+)
+async def logout_all(current_user: CurrentUser, db: DbSession) -> None:
+    """Revoke every refresh token for this account, and every access token with it.
+
+    THE DIFFERENCE FROM /auth/logout, WHICH IS THE WHOLE POINT.
+
+    Ordinary logout ends one session and leaves that client's access token
+    working until it expires - a bounded, deliberate gap. This endpoint is
+    what a user reaches for when they believe someone ELSE has their session,
+    and there the gap is unacceptable: fifteen more minutes of access to a
+    finance account is exactly what they are trying to stop.
+
+    So this also increments the account's `token_version`, which invalidates
+    every access token ever issued to it - including the one used to make this
+    request. That is intended, not a bug: the caller must log in again, and so
+    must the attacker, who cannot.
+
+    AUTHENTICATED, unlike /auth/logout.
+
+    A refresh token in the body would identify one session; this operation
+    affects all of them, so it requires proof of current control of the
+    account rather than possession of one credential. A caller whose access
+    token has expired can refresh first - and a caller who cannot refresh has
+    already lost nothing, since their sessions are what this would have ended.
+    """
+    await log_out_everywhere(db, current_user)
 
 
 @router.get(

@@ -61,6 +61,7 @@ def forge(key: str = SECRET, **overrides: object) -> str:
         "exp": now + timedelta(minutes=30),
         "iat": now,
         "type": ACCESS_TOKEN_TYPE,
+        "ver": 1,
     }
     claims.update(overrides)
     return jwt.encode(claims, key, algorithm=ALGORITHM)
@@ -75,7 +76,9 @@ class TestAuthenticatedRequest:
     ) -> None:
         user = await register(db_session)
 
-        response = await db_client.get(ME_URL, headers=auth(create_access_token(user.id)))
+        response = await db_client.get(
+            ME_URL, headers=auth(create_access_token(user.id, token_version=user.token_version))
+        )
 
         assert response.status_code == 200
         body = response.json()
@@ -112,7 +115,9 @@ class TestAuthenticatedRequest:
         """
         user = await register(db_session)
 
-        response = await db_client.get(ME_URL, headers=auth(create_access_token(user.id)))
+        response = await db_client.get(
+            ME_URL, headers=auth(create_access_token(user.id, token_version=user.token_version))
+        )
 
         assert "hashed_password" not in response.text
         assert user.hashed_password not in response.text
@@ -130,7 +135,9 @@ class TestAuthenticatedRequest:
         ada = await register(db_session, email="ada@example.com")
         grace = await register(db_session, email="grace@example.com")
 
-        response = await db_client.get(ME_URL, headers=auth(create_access_token(grace.id)))
+        response = await db_client.get(
+            ME_URL, headers=auth(create_access_token(grace.id, token_version=grace.token_version))
+        )
 
         assert response.status_code == 200
         assert response.json()["id"] == str(grace.id)
@@ -181,7 +188,7 @@ class TestMissingOrMalformedHeader:
         accepting credentials of kinds we never issued.
         """
         response = await db_client.get(
-            ME_URL, headers={"Authorization": create_access_token(uuid.uuid4())}
+            ME_URL, headers={"Authorization": create_access_token(uuid.uuid4(), token_version=1)}
         )
 
         assert response.status_code == 401
@@ -255,7 +262,9 @@ class TestRejectedTokens:
         signature verifies, so a dependency that skipped the database would
         happily authenticate a ghost.
         """
-        response = await db_client.get(ME_URL, headers=auth(create_access_token(uuid.uuid4())))
+        response = await db_client.get(
+            ME_URL, headers=auth(create_access_token(uuid.uuid4(), token_version=1))
+        )
 
         assert response.status_code == 401
 
@@ -283,7 +292,7 @@ class TestRejectedTokens:
             forge(sub=str(user.id), exp=datetime.now(UTC) - timedelta(seconds=1)),
             forge(key="not-our-secret-key-but-long-enough-xx", sub=str(user.id)),
             forge(sub=str(user.id), type="refresh"),
-            create_access_token(uuid.uuid4()),
+            create_access_token(uuid.uuid4(), token_version=1),
         ]
 
         responses = [await db_client.get(ME_URL, headers=auth(token)) for token in bad_tokens]
@@ -311,7 +320,9 @@ class TestDeactivatedAccount:
         """
         user = await register(db_session, active=False)
 
-        response = await db_client.get(ME_URL, headers=auth(create_access_token(user.id)))
+        response = await db_client.get(
+            ME_URL, headers=auth(create_access_token(user.id, token_version=user.token_version))
+        )
 
         assert response.status_code == 403
 
@@ -329,7 +340,7 @@ class TestDeactivatedAccount:
         lifetime.
         """
         user = await register(db_session)
-        token = create_access_token(user.id)
+        token = create_access_token(user.id, token_version=user.token_version)
 
         assert (await db_client.get(ME_URL, headers=auth(token))).status_code == 200
 

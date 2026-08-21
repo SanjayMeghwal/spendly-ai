@@ -154,7 +154,7 @@ class TestRotation:
 
         body = (await send_refresh(db_client, original["refresh_token"])).json()
 
-        assert decode_access_token(body["access_token"]) == user.id
+        assert decode_access_token(body["access_token"]).user_id == user.id
 
         me = await db_client.get(ME_URL, headers=auth(body["access_token"]))
         assert me.status_code == 200
@@ -570,7 +570,7 @@ class TestUserIsolation:
 
         body = (await send_refresh(db_client, ada["refresh_token"])).json()
 
-        assert decode_access_token(body["access_token"]) != other.id
+        assert decode_access_token(body["access_token"]).user_id != other.id
 
     async def test_revoking_one_users_session_leaves_another_untouched(
         self, db_client: AsyncClient, db_session: AsyncSession

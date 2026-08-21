@@ -119,26 +119,42 @@ async def get_current_user(credentials: BearerToken, db: DbSession) -> User:
     off switch.
 
     Raises:
-        HTTPException: 401 if the token is absent or not valid; 403 if it is
-            valid but names a deactivated account.
+        HTTPException: 401 if the token is absent, not valid, or superseded;
+            403 if it is valid but names a deactivated account.
     """
     if credentials is None:
         # No Authorization header, or one that is not a Bearer scheme.
         raise _unauthenticated()
 
     try:
-        user_id = decode_access_token(credentials.credentials)
+        claims = decode_access_token(credentials.credentials)
     except TokenError:
         # Expired, forged, malformed, or a refresh token used as an access
         # token. Deliberately indistinguishable - see _unauthenticated.
         raise _unauthenticated() from None
 
-    user = await get_user_by_id(db, user_id)
+    user = await get_user_by_id(db, claims.user_id)
 
     if user is None:
         # A validly-signed token naming a row that no longer exists. Not an
         # error on our side: the account was deleted after the token was
         # issued. Same 401 - the token is simply no longer usable.
+        raise _unauthenticated()
+
+    if claims.token_version != user.token_version:
+        # The token was SUPERSEDED - by a logout-everywhere, or by a password
+        # change. This is the check that makes an access token revocable
+        # without storing one row per token: a single counter on the user
+        # invalidates every token issued before it was bumped.
+        #
+        # Deliberately `!=` rather than `<`. A token claiming a HIGHER version
+        # than the user has cannot be one we issued - it means our own state
+        # went backwards (a restored database snapshot, say), and the safe
+        # reading of a claim we cannot account for is to refuse it.
+        #
+        # Same 401 as every other token failure. "Your session was ended
+        # elsewhere" would be friendlier and would also confirm to an attacker
+        # that the token was genuine and merely stale.
         raise _unauthenticated()
 
     if not user.is_active:
