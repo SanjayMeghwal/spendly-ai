@@ -6,8 +6,10 @@ and goals, and get financial insight from a locally-hosted LLM.
 Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
-> **Status: early development.** Milestone 1 (walking skeleton) is complete —
-> the API, database, migrations, tests, and CI pipeline all run end to end.
+> **Status: early development.** Milestones 1 (walking skeleton) and 2
+> (authentication) are complete — the API, database, migrations, tests, and CI
+> pipeline all run end to end, and the auth flow issues, rotates, and revokes
+> tokens.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -35,8 +37,8 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | FastAPI app + liveness/readiness probes | ✅ Done |
 | Database migrations (Alembic) | ✅ Done |
 | CI pipeline (lint, types, migrations, tests) | ✅ Done |
-| Authentication & user profiles | 🚧 Next |
-| Income & expense tracking | ⬜ Planned |
+| Authentication & user profiles | ✅ Done |
+| Income & expense tracking | 🚧 Next |
 | Categories, budgets, goals | ⬜ Planned |
 | Dashboard & analytics | ⬜ Planned |
 | CSV import & reports | ⬜ Planned |
@@ -89,6 +91,32 @@ uv run pytest                 # tests
 uv run ruff check .           # lint
 uv run mypy .                 # type check
 ```
+
+---
+
+## API
+
+Interactive docs at `/docs` when `ENVIRONMENT` is not `production`.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/register` | — | Create an account |
+| `POST` | `/api/v1/auth/login` | — | Exchange credentials for an access + refresh pair |
+| `POST` | `/api/v1/auth/refresh` | refresh token | Rotate the pair; reuse of a spent token kills the family |
+| `POST` | `/api/v1/auth/logout` | refresh token | End one session |
+| `POST` | `/api/v1/auth/logout-all` | access token | End every session on every device |
+| `GET` | `/api/v1/auth/me` | access token | The caller's own account |
+| `GET` | `/health` | — | Liveness — process is up |
+| `GET` | `/health/ready` | — | Readiness — database answers |
+
+**Token model.** Access tokens are short-lived JWTs. Verification checks the
+signature and then loads the user to compare a `ver` claim against the stored
+`token_version` — the deliberate cost of making revocation immediate rather
+than waiting for expiry. Refresh tokens are long-lived, stored by `jti`,
+and rotated on every use: presenting an already-rotated token is treated as
+theft and revokes the whole family. `logout-all` bumps a per-user
+`token_version` carried as a JWT claim, so every outstanding access token
+becomes invalid at its next use without any blacklist.
 
 ---
 
