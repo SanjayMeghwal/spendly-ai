@@ -4,18 +4,63 @@ HTTP only. Routing, status codes, and the translation of domain exceptions
 into responses. No business logic lives here - see app/services/user.py.
 """
 
+import uuid
+
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import get_settings
 from app.core.tokens import create_access_token
 from app.models import User
-from app.schemas.auth import LoginRequest, TokenResponse
+from app.schemas.auth import LoginRequest, RefreshRequest, TokenResponse
 from app.schemas.user import UserCreate, UserRead
 from app.services.auth import InactiveUser, InvalidCredentials, authenticate_user
+from app.services.refresh import (
+    InvalidRefreshToken,
+    issue_refresh_token,
+    rotate_refresh_token,
+)
 from app.services.user import EmailAlreadyRegistered, create_user
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+
+
+def _issued(user_id: uuid.UUID, refresh_token: str) -> TokenResponse:
+    """Build the response both /login and /refresh return.
+
+    Shared so the two endpoints cannot drift. A client must not have to care
+    whether a token pair came from a password or from a rotation - the shape,
+    the field names, and the advertised access-token lifetime are identical,
+    which is what lets client code have exactly one path for storing them.
+
+    The access token is minted here rather than in a service because it needs
+    nothing from the database: it is a pure function of the user id and the
+    signing key. The refresh token, which does need a row, is created by the
+    service and passed in.
+    """
+    settings = get_settings()
+
+    return TokenResponse(
+        access_token=create_access_token(user_id),
+        refresh_token=refresh_token,
+        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+    )
+
+
+def _unauthenticated() -> HTTPException:
+    """The single 401 for a credential that cannot be validated.
+
+    Mirrors app/api/deps.py deliberately: an attacker probing /refresh must
+    not be able to tell a forged token from an expired one from one that was
+    already used. The last of those is the valuable signal - "already used"
+    would confirm the token was genuine - and it is exactly what this hides.
+    """
+    return HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials.",
+        # Required by RFC 6750 on a 401 from a bearer-protected endpoint.
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 @router.post(
@@ -84,14 +129,14 @@ async def register(payload: UserCreate, db: DbSession) -> User:
     # for a token. The token is not a thing at a URL that can be fetched again.
     status_code=status.HTTP_200_OK,
     response_model=TokenResponse,
-    summary="Exchange credentials for an access token",
+    summary="Exchange credentials for a token pair",
     responses={
         status.HTTP_401_UNAUTHORIZED: {"description": "Invalid email or password."},
         status.HTTP_403_FORBIDDEN: {"description": "Account is deactivated."},
     },
 )
 async def login(credentials: LoginRequest, db: DbSession) -> TokenResponse:
-    """Authenticate and issue an access token.
+    """Authenticate and issue an access token plus a refresh token.
 
     ONE ERROR MESSAGE FOR BOTH FAILURE MODES.
 
@@ -137,11 +182,59 @@ async def login(credentials: LoginRequest, db: DbSession) -> TokenResponse:
             detail="This account has been deactivated.",
         ) from None
 
-    settings = get_settings()
-    return TokenResponse(
-        access_token=create_access_token(user.id),
-        expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
+    # A successful password check is the ONLY place a new session begins.
+    # Every other token in the system is descended from this call by rotation,
+    # which is what makes "when did this session start, and from what?"
+    # answerable.
+    return _issued(user.id, await issue_refresh_token(db, user.id))
+
+
+@router.post(
+    "/refresh",
+    status_code=status.HTTP_200_OK,
+    response_model=TokenResponse,
+    summary="Exchange a refresh token for a new token pair",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Refresh token is missing or unusable."},
+        status.HTTP_403_FORBIDDEN: {"description": "Account is deactivated."},
+    },
+)
+async def refresh(payload: RefreshRequest, db: DbSession) -> TokenResponse:
+    """Rotate a refresh token, returning a new access token and a new refresh token.
+
+    THIS ENDPOINT IS NOT AUTHENTICATED IN THE USUAL SENSE, AND MUST NOT BE.
+
+    There is no `CurrentUser` here, which looks like an omission and is not.
+    The whole purpose of refreshing is to recover from an EXPIRED access
+    token, so requiring a valid one would make the endpoint useless precisely
+    when it is needed. The refresh token in the body is the credential, and it
+    is a stronger one: it is checked against a database row, which an access
+    token never is.
+
+    THE OLD TOKEN IS DEAD WHEN THIS RETURNS.
+
+    A client must replace its stored refresh token with the one in this
+    response. Retrying this call with the old value - after a dropped
+    connection, or an over-eager retry interceptor - is indistinguishable from
+    a stolen token being replayed, and is answered the same way: the entire
+    session is revoked and the user must sign in again. That is a deliberate,
+    documented cost of reuse detection. Being unable to tell an honest retry
+    from a theft, the safe assumption is theft.
+    """
+    try:
+        session = await rotate_refresh_token(db, payload.refresh_token.get_secret_value())
+    except InvalidRefreshToken:
+        raise _unauthenticated() from None
+    except InactiveUser:
+        # Consistent with /login and with the CurrentUser dependency: 403, not
+        # 401, and safe to distinguish because it is only reachable by someone
+        # holding a live token we issued to this account.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account has been deactivated.",
+        ) from None
+
+    return _issued(session.user.id, session.refresh_token)
 
 
 @router.get(

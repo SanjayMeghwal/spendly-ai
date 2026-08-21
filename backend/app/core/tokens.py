@@ -24,21 +24,42 @@ is fine - the user already knows their own id.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 import jwt
 
 from app.core.config import get_settings
 
-# Marks a token as an ACCESS token.
+# THE `type` CLAIM, AND WHY IT WAS WRITTEN BEFORE IT WAS NEEDED.
 #
-# This costs one claim now and prevents a whole vulnerability class later.
-# When refresh tokens arrive, both kinds will be signed by the same key - so
-# without a type claim, a long-lived refresh token would verify perfectly as
-# an access token, silently handing an attacker a 30-day session. Rejecting
-# the wrong type is only possible if the type is recorded in the first place,
-# and retrofitting a claim means invalidating every token already issued.
+# Both kinds of token are signed with the SAME key, so cryptography alone
+# cannot tell them apart: a refresh token presented to a protected endpoint
+# verifies perfectly. Without this claim it would be accepted, silently
+# handing the bearer a 30-DAY session in place of a 15-minute one - the
+# opposite of what the two lifetimes are for.
+#
+# The claim was added with access tokens, before refresh tokens existed,
+# precisely because retrofitting it would have invalidated every token already
+# issued. It now costs nothing to enforce in both directions.
 ACCESS_TOKEN_TYPE = "access"
+REFRESH_TOKEN_TYPE = "refresh"
+
+
+class RefreshTokenClaims(NamedTuple):
+    """The two identifiers a refresh token carries.
+
+    A NamedTuple rather than a bare tuple so `claims.token_id` reads
+    unambiguously at the call site. Both values are UUIDs, and returning them
+    positionally would make transposing them a silent, type-correct bug.
+    """
+
+    user_id: uuid.UUID
+
+    # The `jti` claim - the primary key of this token's row in
+    # `refresh_tokens`. It is what makes a refresh token REVOCABLE while an
+    # access token is not: the signature says "we issued this", and the row
+    # says "and it is still valid".
+    token_id: uuid.UUID
 
 
 class TokenError(Exception):
@@ -94,11 +115,50 @@ def create_access_token(user_id: uuid.UUID) -> str:
     )
 
 
-def decode_access_token(token: str) -> uuid.UUID:
-    """Verify a token and return the user id it identifies.
+def create_refresh_token(
+    user_id: uuid.UUID,
+    *,
+    token_id: uuid.UUID,
+    expires_at: datetime,
+) -> str:
+    """Mint a signed refresh token for one row in the `refresh_tokens` table.
 
-    Raises:
-        TokenError: for every failure mode, without distinguishing them.
+    WHY THIS TAKES ITS ID AND EXPIRY INSTEAD OF CHOOSING THEM.
+
+    Unlike an access token, a refresh token is only half a credential. The
+    other half is the database row it names, and the two must agree exactly:
+    if the `exp` claim outlived the row's `expires_at`, the token would look
+    valid to any standard JWT library while being dead to us - and if it
+    expired first, the row would linger as a session nobody can close.
+
+    The service layer creates the row, so the service layer owns both values.
+    This function's job is only to sign what it is given. Computing a fresh
+    expiry here would quietly turn rotation into a SLIDING session that a
+    stolen token could renew forever.
+
+    `jti` is the RFC 7519 registered claim for a token identifier. Using the
+    standard name rather than inventing one means any tooling that inspects
+    JWTs - including jwt.io - labels it correctly.
+    """
+    settings = get_settings()
+
+    payload = {
+        "sub": str(user_id),
+        "exp": expires_at,
+        "iat": datetime.now(UTC),
+        "type": REFRESH_TOKEN_TYPE,
+        "jti": str(token_id),
+    }
+
+    return jwt.encode(
+        payload,
+        settings.SECRET_KEY.get_secret_value(),
+        algorithm=settings.JWT_ALGORITHM,
+    )
+
+
+def _decode(token: str, *, expected_type: str, require: list[str]) -> dict[str, Any]:
+    """Verify a signature and the claims every token of a given type must have.
 
     THE ALGORITHM ALLOWLIST IS THE SECURITY BOUNDARY HERE.
 
@@ -116,6 +176,13 @@ def decode_access_token(token: str) -> uuid.UUID:
 
     PyJWT requires this argument explicitly, which is precisely why it is a
     better choice than a library that will happily infer it.
+
+    `require` refuses a token that OMITS a claim rather than one that fails
+    it. Without it, a token missing `exp` verifies happily and never expires -
+    and the tokens most likely to lack a claim are forged ones.
+
+    Raises:
+        TokenError: for every failure mode, without distinguishing them.
     """
     settings = get_settings()
 
@@ -124,10 +191,7 @@ def decode_access_token(token: str) -> uuid.UUID:
             token,
             settings.SECRET_KEY.get_secret_value(),
             algorithms=[settings.JWT_ALGORITHM],
-            # Refuse a token that carries no expiry. Without this, a token
-            # missing `exp` verifies happily and never expires - and the
-            # tokens most likely to lack it are forged ones.
-            options={"require": ["exp", "sub"]},
+            options={"require": require},
         )
     except jwt.InvalidTokenError as exc:
         # The base class for every PyJWT failure: expired, bad signature,
@@ -136,20 +200,64 @@ def decode_access_token(token: str) -> uuid.UUID:
         # safely by default rather than escaping as a 500.
         raise TokenError("could not validate token") from exc
 
-    if payload.get("type") != ACCESS_TOKEN_TYPE:
-        # Presenting a refresh token where an access token is required. Not
-        # yet reachable - refresh tokens do not exist - but the check must
-        # exist BEFORE they do, or adding them introduces the hole.
+    if payload.get("type") != expected_type:
+        # An access token presented where a refresh token is required, or the
+        # reverse. See ACCESS_TOKEN_TYPE above for why this matters more than
+        # it looks like it should.
         raise TokenError("wrong token type")
 
-    subject = payload.get("sub")
-    if not isinstance(subject, str):  # pragma: no cover - `require` guarantees it
-        raise TokenError("malformed subject")
+    return payload
+
+
+def _uuid_claim(payload: dict[str, Any], name: str) -> uuid.UUID:
+    """Read one claim that must be a UUID.
+
+    A validly-signed token whose `sub` or `jti` is not a UUID means our own
+    issuing code changed shape - nobody else can produce a signature. It is
+    still a TokenError to the caller, who can do nothing differently either
+    way, but it must never escape as a 500.
+    """
+    value = payload.get(name)
+
+    if not isinstance(value, str):  # pragma: no cover - `require` guarantees it
+        raise TokenError(f"malformed {name}")
 
     try:
-        return uuid.UUID(subject)
+        return uuid.UUID(value)
     except ValueError as exc:
-        # A validly-signed token whose subject is not a UUID means our own
-        # issuing code changed shape. Still a TokenError to the caller, who
-        # can do nothing differently either way.
-        raise TokenError("malformed subject") from exc
+        raise TokenError(f"malformed {name}") from exc
+
+
+def decode_access_token(token: str) -> uuid.UUID:
+    """Verify an access token and return the user id it identifies.
+
+    Raises:
+        TokenError: for every failure mode, without distinguishing them.
+    """
+    payload = _decode(token, expected_type=ACCESS_TOKEN_TYPE, require=["exp", "sub"])
+    return _uuid_claim(payload, "sub")
+
+
+def decode_refresh_token(token: str) -> RefreshTokenClaims:
+    """Verify a refresh token and return the ids it carries.
+
+    A PASSING RETURN FROM THIS FUNCTION IS NOT SUFFICIENT TO REFRESH.
+
+    It proves only that we signed this token and that it has not yet expired.
+    It says nothing about whether the token has already been used, been
+    revoked, or belongs to a session we tore down - all of which live in the
+    database, not in the signature. `services/refresh.py` performs those
+    checks, and this function must never be called without it.
+
+    Requiring `jti` is what makes that possible: a refresh token with no id
+    names no row, so there would be nothing to revoke.
+
+    Raises:
+        TokenError: for every failure mode, without distinguishing them.
+    """
+    payload = _decode(token, expected_type=REFRESH_TOKEN_TYPE, require=["exp", "sub", "jti"])
+
+    return RefreshTokenClaims(
+        user_id=_uuid_claim(payload, "sub"),
+        token_id=_uuid_claim(payload, "jti"),
+    )

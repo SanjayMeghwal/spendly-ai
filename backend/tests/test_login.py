@@ -42,7 +42,16 @@ def credentials(**overrides: object) -> dict[str, object]:
 class TestSuccessfulLogin:
     """The happy path, and what the token actually contains."""
 
-    async def test_returns_a_token(self, db_client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_returns_a_token_pair(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Both tokens, and the ACCESS token's lifetime.
+
+        `expires_in` describes the access token only - the refresh token's
+        expiry is deliberately not published (see schemas/auth.py). Pinning
+        the number here means shortening the access-token lifetime is a
+        deliberate edit rather than a silent change to the API contract.
+        """
         await register(db_session)
 
         response = await db_client.post(LOGIN_URL, json=credentials())
@@ -50,8 +59,13 @@ class TestSuccessfulLogin:
         assert response.status_code == 200
         body = response.json()
         assert body["token_type"] == "bearer"
-        assert body["expires_in"] == 30 * 60
+        assert body["expires_in"] == 15 * 60
         assert body["access_token"]
+        assert body["refresh_token"]
+        # The two must be different strings. Returning the same token twice
+        # under two names would give a 30-day credential the routing of a
+        # 15-minute one, defeating the entire split.
+        assert body["access_token"] != body["refresh_token"]
 
     async def test_token_identifies_the_user_who_logged_in(
         self, db_client: AsyncClient, db_session: AsyncSession

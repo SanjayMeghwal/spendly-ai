@@ -19,9 +19,12 @@ import pytest
 from app.core.config import get_settings
 from app.core.tokens import (
     ACCESS_TOKEN_TYPE,
+    REFRESH_TOKEN_TYPE,
     TokenError,
     create_access_token,
+    create_refresh_token,
     decode_access_token,
+    decode_refresh_token,
 )
 
 SECRET = get_settings().SECRET_KEY.get_secret_value()
@@ -44,6 +47,35 @@ def valid_claims(**overrides: object) -> dict[str, object]:
     }
     claims.update(overrides)
     return claims
+
+
+def valid_refresh_claims(**overrides: object) -> dict[str, object]:
+    """The claim set create_refresh_token produces, overridable per test."""
+    now = datetime.now(UTC)
+    claims: dict[str, object] = {
+        "sub": str(uuid.uuid4()),
+        "exp": now + timedelta(days=30),
+        "iat": now,
+        "type": REFRESH_TOKEN_TYPE,
+        "jti": str(uuid.uuid4()),
+    }
+    claims.update(overrides)
+    return claims
+
+
+def a_refresh_token(**overrides: object) -> str:
+    """A refresh token minted the way the service mints them."""
+    defaults: dict[str, object] = {
+        "user_id": uuid.uuid4(),
+        "token_id": uuid.uuid4(),
+        "expires_at": datetime.now(UTC) + timedelta(days=30),
+    }
+    defaults.update(overrides)
+    return create_refresh_token(
+        defaults["user_id"],  # type: ignore[arg-type]
+        token_id=defaults["token_id"],  # type: ignore[arg-type]
+        expires_at=defaults["expires_at"],  # type: ignore[arg-type]
+    )
 
 
 class TestRoundTrip:
@@ -242,3 +274,128 @@ class TestErrorsDoNotDiscriminate:
         for token in failures:
             with pytest.raises(TokenError):
                 decode_access_token(token)
+
+
+class TestRefreshTokenRoundTrip:
+    """A refresh token carries two ids, and both must survive the round trip."""
+
+    def test_returns_the_user_and_token_ids_it_was_created_with(self) -> None:
+        user_id = uuid.uuid4()
+        token_id = uuid.uuid4()
+
+        claims = decode_refresh_token(a_refresh_token(user_id=user_id, token_id=token_id))
+
+        assert claims.user_id == user_id
+        assert claims.token_id == token_id
+
+    def test_honours_the_expiry_it_is_given(self) -> None:
+        """The service, not this module, decides when a session ends.
+
+        create_refresh_token signs the expiry it is handed rather than
+        computing one, so that the `exp` claim and the row's `expires_at`
+        column cannot disagree. This proves it does not quietly substitute a
+        default: a past expiry produces a token that is already dead.
+        """
+        already_expired = datetime.now(UTC) - timedelta(seconds=1)
+
+        with pytest.raises(TokenError):
+            decode_refresh_token(a_refresh_token(expires_at=already_expired))
+
+    def test_payload_carries_nothing_sensitive(self) -> None:
+        """Same rule as for access tokens: the payload is public.
+
+        An exact claim set, so adding one forces a decision here about whether
+        the new value is safe to publish. `jti` is - it is a random UUID that
+        identifies a row an attacker cannot read.
+        """
+        token = a_refresh_token()
+
+        segment = token.split(".")[1]
+        padded = segment + "=" * (-len(segment) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(padded))
+
+        assert set(claims) == {"sub", "exp", "iat", "type", "jti"}
+
+
+class TestTokenTypesAreNotInterchangeable:
+    """The vulnerability the `type` claim exists to prevent, both directions.
+
+    Both kinds of token are signed with the SAME key, so the signature cannot
+    tell them apart. Without the type check, a 30-day refresh token would
+    authenticate every protected endpoint - turning the short access-token
+    lifetime, and therefore the entire point of the split, into decoration.
+    """
+
+    def test_a_refresh_token_is_not_an_access_token(self) -> None:
+        with pytest.raises(TokenError):
+            decode_access_token(a_refresh_token())
+
+    def test_an_access_token_is_not_a_refresh_token(self) -> None:
+        """The other direction matters too, if less dramatically.
+
+        An access token accepted at /refresh would let a 15-minute credential
+        be laundered into a fresh 30-day session, so a stolen access token
+        would stop being time-limited at all.
+        """
+        with pytest.raises(TokenError):
+            decode_refresh_token(create_access_token(uuid.uuid4()))
+
+
+class TestRefreshForgeryIsRejected:
+    """The refresh token is the more valuable credential, so the same rigour."""
+
+    def test_rejects_a_token_signed_with_a_different_key(self) -> None:
+        with pytest.raises(TokenError):
+            decode_refresh_token(forge(valid_refresh_claims(), key="a" * 64))
+
+    def test_rejects_the_alg_none_attack(self) -> None:
+        unsigned = jwt.encode(valid_refresh_claims(), key="", algorithm="none")
+
+        with pytest.raises(TokenError):
+            decode_refresh_token(unsigned)
+
+    def test_rejects_a_token_with_no_jti(self) -> None:
+        """A refresh token with no id names no row, so nothing can revoke it.
+
+        That is the whole reason `jti` is required rather than optional: a
+        token we cannot tie to a row is a 30-day credential with no off
+        switch, which is precisely what this design exists to avoid.
+        """
+        claims = valid_refresh_claims()
+        del claims["jti"]
+
+        with pytest.raises(TokenError):
+            decode_refresh_token(forge(claims))
+
+    def test_rejects_a_non_uuid_jti(self) -> None:
+        with pytest.raises(TokenError):
+            decode_refresh_token(forge(valid_refresh_claims(jti="not-a-uuid")))
+
+    def test_rejects_a_non_uuid_subject(self) -> None:
+        with pytest.raises(TokenError):
+            decode_refresh_token(forge(valid_refresh_claims(sub="not-a-uuid")))
+
+    def test_rejects_an_expired_token(self) -> None:
+        past = datetime.now(UTC) - timedelta(seconds=1)
+
+        with pytest.raises(TokenError):
+            decode_refresh_token(forge(valid_refresh_claims(exp=past)))
+
+    def test_rejects_a_token_with_no_expiry(self) -> None:
+        claims = valid_refresh_claims()
+        del claims["exp"]
+
+        with pytest.raises(TokenError):
+            decode_refresh_token(forge(claims))
+
+    @pytest.mark.parametrize(
+        "garbage",
+        [
+            pytest.param("", id="empty"),
+            pytest.param("not-a-token", id="not-jwt-shaped"),
+            pytest.param("a.b.c", id="three-junk-segments"),
+        ],
+    )
+    def test_rejects_malformed_input(self, garbage: str) -> None:
+        with pytest.raises(TokenError):
+            decode_refresh_token(garbage)

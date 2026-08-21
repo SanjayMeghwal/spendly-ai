@@ -76,11 +76,31 @@ class Settings(BaseSettings):
     # asymmetric, so the verifier holds only the public key.
     JWT_ALGORITHM: str = "HS256"
 
-    # Access tokens cannot be revoked - nothing is stored to revoke against -
-    # so this value IS the exposure window for a stolen token. Short enough to
-    # limit damage, long enough not to interrupt people constantly.
-    # Shortening it further is what the refresh-token slice buys us.
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Access tokens carry no server-side state, so this value IS the exposure
+    # window for a stolen one: nothing can shorten it after the fact.
+    #
+    # 15 minutes rather than 30 - lowered when refresh tokens arrived, which
+    # is exactly the trade they buy. Before them, a short lifetime meant
+    # re-entering a password every 30 minutes, so the number was a compromise
+    # between security and irritation. Now a client silently exchanges its
+    # refresh token for a new access token in the background, and the user
+    # notices nothing, so the only remaining pressure on this number is
+    # downward.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+
+    # Refresh tokens ARE revocable - each one has a row in `refresh_tokens` -
+    # so this is not an exposure window in the same sense. It is how long a
+    # session may live before the user must type their password again.
+    #
+    # Measured in DAYS, not minutes, because that is the point: the long-lived
+    # credential is the one we can switch off, and the short-lived one is the
+    # one we cannot.
+    #
+    # This is an ABSOLUTE lifetime, not a sliding one. Rotating a refresh
+    # token does not extend it (see services/refresh.py), so a session ends 30
+    # days after LOGIN no matter how actively it is used. A sliding window
+    # would let a stolen token be renewed forever.
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
     @field_validator("SECRET_KEY")
     @classmethod
