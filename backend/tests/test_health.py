@@ -118,6 +118,7 @@ class TestApiSurface:
             "/health/ready",
             "/api/v1/auth/register",
             "/api/v1/auth/login",
+            "/api/v1/auth/me",
         }
 
     async def test_docs_are_available_outside_production(self, client: AsyncClient) -> None:

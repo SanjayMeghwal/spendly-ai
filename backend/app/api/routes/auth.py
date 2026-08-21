@@ -6,7 +6,7 @@ into responses. No business logic lives here - see app/services/user.py.
 
 from fastapi import APIRouter, HTTPException, status
 
-from app.api.deps import DbSession
+from app.api.deps import CurrentUser, DbSession
 from app.core.config import get_settings
 from app.core.tokens import create_access_token
 from app.models import User
@@ -142,3 +142,37 @@ async def login(credentials: LoginRequest, db: DbSession) -> TokenResponse:
         access_token=create_access_token(user.id),
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
     )
+
+
+@router.get(
+    "/me",
+    status_code=status.HTTP_200_OK,
+    response_model=UserRead,
+    summary="Get the authenticated user's own account",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {"description": "Missing or invalid access token."},
+        status.HTTP_403_FORBIDDEN: {"description": "Account is deactivated."},
+    },
+)
+async def read_current_user(current_user: CurrentUser) -> User:
+    """Return the account belonging to the presented token.
+
+    The whole endpoint is one line, and that is the point: every check that
+    matters - header present, signature valid, not expired, right token type,
+    user still exists, user still active - happened in the CurrentUser
+    dependency before this function was entered. A handler cannot forget a
+    step it does not perform.
+
+    NOTE THIS TAKES NO USER ID, AND MUST NOT.
+
+    The obvious-looking alternative, `GET /users/{id}`, invites the worst bug
+    in this class of API: reading the id from the URL and trusting it. Then
+    anyone authenticated can fetch anyone else's account by changing a number
+    - authenticated, but not authorised. Here the identity comes from the
+    SIGNED TOKEN, which the caller cannot alter, so there is no id to confuse
+    and no ownership check to forget.
+
+    That principle generalises to every user-owned resource in this project:
+    the owner is derived from the token, never accepted from the request.
+    """
+    return current_user

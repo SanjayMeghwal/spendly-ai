@@ -13,6 +13,8 @@ becomes a 409 is a decision the API layer makes. Raising HTTPException here
 would quietly weld the rules to the web.
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,6 +60,22 @@ async def get_user_by_email(session: AsyncSession, email: str) -> User | None:
     """
     result = await session.execute(select(User).where(User.email == email))
     return result.scalar_one_or_none()
+
+
+async def get_user_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
+    """Look up a user by primary key, or None.
+
+    `session.get()` rather than a `select()`, because this is a primary-key
+    lookup and `get()` checks the session's identity map FIRST. If this user
+    was already loaded earlier in the same request, no second query is issued
+    at all - which matters because this runs on EVERY authenticated request.
+
+    Returning None rather than raising is deliberate. A token can outlive the
+    account it names: the row may have been deleted in the ~30 minutes since
+    the token was signed. That is a perfectly ordinary "not authenticated"
+    outcome, not an exceptional one, and the caller decides what it means.
+    """
+    return await session.get(User, user_id)
 
 
 async def create_user(
