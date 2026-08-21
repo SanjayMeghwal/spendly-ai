@@ -37,7 +37,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.tokens import TokenError, create_refresh_token, decode_refresh_token
 from app.models import RefreshToken, User
-from app.models.refresh_token import REASON_REUSE_DETECTED, REASON_ROTATED
+from app.models.refresh_token import (
+    REASON_LOGOUT,
+    REASON_REUSE_DETECTED,
+    REASON_ROTATED,
+)
 from app.services.auth import InactiveUser
 from app.services.user import get_user_by_id
 
@@ -140,6 +144,61 @@ async def revoke_family(
         )
         .values(revoked_at=datetime.now(UTC), revoked_reason=reason)
     )
+
+
+async def log_out(session: AsyncSession, token: str) -> None:
+    """End the session a refresh token belongs to. Never fails.
+
+    WHY THIS RETURNS NOTHING AND RAISES NOTHING.
+
+    A caller cannot tell whether the token was live, already spent, unknown,
+    forged, or the wrong type - every case ends the same way. That is
+    deliberate and it is what RFC 7009 (OAuth 2.0 Token Revocation) specifies:
+    a revocation endpoint answers success even for an invalid token, because
+    the client's goal - "this token must not work" - is satisfied either way.
+
+    The alternative leaks. If a forged token produced an error while a genuine
+    but already-revoked one produced success, this endpoint would become a
+    free signature-validation oracle: paste a candidate token, read the status
+    code, learn whether it was ever real. /refresh gives an attacker nothing
+    of the sort, and logout must not be the softer door.
+
+    The cost, stated plainly: a client that sends the WRONG token - an access
+    token, say - is told the logout succeeded when nothing was revoked. That
+    is a real usability trap and it is the price of the property above.
+
+    NOTE what this does NOT do: invalidate the ACCESS token the client is
+    holding. Nothing can - an access token has no server-side state, which is
+    the trade that makes it cheap. It expires on its own within
+    ACCESS_TOKEN_EXPIRE_MINUTES, and the client should discard it. The gap is
+    bounded and deliberate; see /auth/logout-all for the case where it is not
+    acceptable.
+
+    An already-revoked family is left exactly as it was - see revoke_family -
+    so logging out twice is a no-op rather than an overwritten audit trail.
+    """
+    try:
+        claims = decode_refresh_token(token)
+    except TokenError:
+        # Not a token we issued, or no longer a valid one. Nothing to revoke,
+        # and nothing to report.
+        return
+
+    stored = await session.get(RefreshToken, claims.token_id)
+
+    if stored is None or stored.user_id != claims.user_id:
+        # Names no row, or names a row belonging to someone else. Refusing to
+        # act on a mismatch is what stops a forged `sub` from ending another
+        # user's session.
+        return
+
+    # Deliberately NOT treated as reuse, even when the token was already
+    # spent. A client whose refresh failed and then logs out is holding a
+    # spent token through completely normal use, and the outcome is identical
+    # anyway: the family ends. Recording it as an attack would fill the audit
+    # trail with false positives and hide the real ones.
+    await revoke_family(session, stored.family_id, reason=REASON_LOGOUT)
+    await session.commit()
 
 
 async def rotate_refresh_token(session: AsyncSession, token: str) -> RefreshedSession:

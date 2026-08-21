@@ -18,6 +18,7 @@ from app.services.auth import InactiveUser, InvalidCredentials, authenticate_use
 from app.services.refresh import (
     InvalidRefreshToken,
     issue_refresh_token,
+    log_out,
     rotate_refresh_token,
 )
 from app.services.user import EmailAlreadyRegistered, create_user
@@ -235,6 +236,57 @@ async def refresh(payload: RefreshRequest, db: DbSession) -> TokenResponse:
         ) from None
 
     return _issued(session.user.id, session.refresh_token)
+
+
+@router.post(
+    "/logout",
+    # 204, not 200. There is nothing useful to return - the client already
+    # knows which token it sent - and a body would only invite a client to
+    # parse it for a distinction this endpoint deliberately does not make.
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="End the session a refresh token belongs to",
+    responses={
+        status.HTTP_204_NO_CONTENT: {
+            "description": "The session is ended, or was never valid. Both answer the same."
+        },
+    },
+)
+async def logout(payload: RefreshRequest, db: DbSession) -> None:
+    """Revoke a refresh token and every token rotated from it.
+
+    WHY LOGOUT NEEDS A SERVER AT ALL.
+
+    The tempting implementation is to delete the tokens in the browser and
+    call it done. That is not logout, it is forgetting: the refresh token
+    remains valid for up to 30 days, so anyone who captured it - from a log, a
+    backup, a shared machine, a proxy - can still mint access tokens long
+    after the user believes they signed out. "Log out" has to mean the
+    credential stops working, and only the server can make that true.
+
+    WHY THIS ALWAYS ANSWERS 204.
+
+    Valid, expired, already revoked, unknown, forged, or the wrong kind of
+    token: all 204. RFC 7009 specifies exactly this for revocation endpoints,
+    and the reason is that any distinction here would be a signature-checking
+    oracle - paste a token, read the status, learn whether it was ever real.
+    /refresh reveals nothing of the sort, and logout must not be the softer
+    door into the same question.
+
+    WHAT THIS DOES NOT DO.
+
+    The client's ACCESS token keeps working until it expires - up to
+    ACCESS_TOKEN_EXPIRE_MINUTES. Nothing can revoke it; having no server-side
+    state is precisely what makes it cheap to verify. The window is bounded
+    and the client should discard the token, but an attacker who already
+    holds a copy keeps it until it dies on its own. When that is not good
+    enough - a password change, or a laptop that is genuinely gone - the
+    answer is /auth/logout-all, which ends every session at once.
+
+    Not authenticated, deliberately. Requiring a live access token would mean
+    a user whose access token had just expired could not log out, which is
+    both absurd and the exact moment they are most likely to try.
+    """
+    await log_out(db, payload.refresh_token.get_secret_value())
 
 
 @router.get(

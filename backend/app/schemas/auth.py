@@ -79,7 +79,13 @@ class TokenResponse(BaseModel):
 
 
 class RefreshRequest(BaseModel):
-    """A refresh token being exchanged for a new pair."""
+    """A refresh token presented as the credential.
+
+    Shared by /auth/refresh, which spends it, and /auth/logout, which revokes
+    it. One schema rather than two identical ones: the body is the same
+    credential in the same place, and duplicating it would invite the two to
+    drift apart in the OpenAPI document for no reason.
+    """
 
     # SecretStr for the same reason as a password: this IS a credential, and a
     # 30-day one. Without it, any log line, debugger frame, or error-tracker

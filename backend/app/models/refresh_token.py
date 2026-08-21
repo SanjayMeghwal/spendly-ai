@@ -47,6 +47,7 @@ from app.db.base import Base
 # ------------------------------------------------------------------------------
 REASON_ROTATED = "rotated"
 REASON_REUSE_DETECTED = "reuse_detected"
+REASON_LOGOUT = "logout"
 
 
 class RefreshToken(Base):
