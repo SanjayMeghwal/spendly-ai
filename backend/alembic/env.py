@@ -20,6 +20,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+# `app.models` is imported for its SIDE EFFECT - see the note below. Keep it
+# grouped with the other imports so ruff's isort rule stays satisfied.
+from app import models  # noqa: F401
 from app.core.config import get_settings
 from app.db.base import Base
 
@@ -27,15 +30,14 @@ from app.db.base import Base
 # IMPORTANT - autogenerate only sees models that have been IMPORTED.
 #
 # A model class registers itself on Base.metadata when its module is imported.
-# If a model is never imported here, autogenerate does not know it exists and
+# If a model is never imported above, autogenerate does not know it exists and
 # will happily generate a migration that DROPS its table, because from
 # Alembic's point of view the table exists in the database but not in the
 # models.
 #
-# There are no models yet. When app/models/ gains its first module, import it
-# here (or import an aggregating module) BEFORE generating any migration.
+# `app.models` re-exports every model, so that one import registers all of them.
+# The name is never referenced, hence the noqa: F401.
 # ------------------------------------------------------------------------------
-# from app import models  # noqa: F401
 
 config = context.config
 
