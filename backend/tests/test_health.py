@@ -47,13 +47,20 @@ class TestReadiness:
     """GET /health/ready - reports whether this instance can serve traffic."""
 
     @pytest.mark.integration
-    async def test_reports_connected_against_a_real_database(self, client: AsyncClient) -> None:
+    async def test_reports_connected_against_a_real_database(
+        self, client_using_app_engine: AsyncClient
+    ) -> None:
         """Requires a running PostgreSQL. Verifies the full path works.
 
         Deliberately not mocked: this is the only test that proves the engine,
         pool, driver, and network configuration actually cooperate.
+
+        It uses `client_using_app_engine` rather than the ordinary `client`
+        precisely because `client` swaps in the test fixture's session. Going
+        through that would exercise the test harness's engine instead of the
+        one the application ships, which is the opposite of this test's point.
         """
-        response = await client.get("/health/ready")
+        response = await client_using_app_engine.get("/health/ready")
 
         assert response.status_code == 200
         body = response.json()
@@ -109,7 +116,13 @@ class TestApiSurface:
         response = await client.get("/openapi.json")
 
         assert response.status_code == 200
-        assert set(response.json()["paths"]) == {"/health", "/health/ready"}
+        assert set(response.json()["paths"]) == {
+            "/health",
+            "/health/ready",
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/users/me",
+        }
 
     async def test_docs_are_available_outside_production(self, client: AsyncClient) -> None:
         """Interactive docs are enabled in local and test environments only."""

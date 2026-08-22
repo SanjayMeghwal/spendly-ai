@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app import __version__
-from app.api.routes import health
+from app.api.routes import auth, health, users
 from app.core.config import get_settings
 from app.db.session import engine
 
@@ -63,3 +63,10 @@ app = FastAPI(
 # versions. Business endpoints will be mounted under settings.API_V1_PREFIX so
 # that a future /api/v2 can ship without breaking existing clients.
 app.include_router(health.router)
+
+# Business endpoints live under /api/v1. Versioning the prefix now - while
+# there is exactly one client and no external consumers - costs nothing.
+# Retrofitting it later means every existing client breaks on the day we need
+# to change a response shape.
+app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
+app.include_router(users.router, prefix=settings.API_V1_PREFIX)
