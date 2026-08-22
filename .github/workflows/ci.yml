@@ -63,6 +63,14 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://spendly:ci_ephemeral_password@localhost:5432/spendly_test
       ENVIRONMENT: test
+      # Also NOT a secret, for the same reason as the database password above:
+      # it signs tokens that exist only inside this throwaway job. It is here
+      # rather than in GitHub Secrets because a value that must never vary
+      # between runs, and whose exposure costs nothing, is configuration.
+      #
+      # It is comfortably longer than 32 characters because the app refuses to
+      # start below that - the same validation that protects a real deployment.
+      SECRET_KEY: ci_only_not_a_real_signing_key_padded_to_48ch
 
     steps:
       - name: Check out repository
