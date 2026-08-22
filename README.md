@@ -6,8 +6,9 @@ and goals, and get financial insight from a locally-hosted LLM.
 Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
-> **Status: early development.** Milestone 1 (walking skeleton) is complete —
-> the API, database, migrations, tests, and CI pipeline all run end to end.
+> **Status: early development.** Milestones 1 and 2 are complete — the API,
+> database, migrations, tests, and CI run end to end, and accounts can register,
+> log in, and call an authenticated endpoint.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -35,8 +36,8 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | FastAPI app + liveness/readiness probes | ✅ Done |
 | Database migrations (Alembic) | ✅ Done |
 | CI pipeline (lint, types, migrations, tests) | ✅ Done |
-| Authentication & user profiles | 🚧 Next |
-| Income & expense tracking | ⬜ Planned |
+| Authentication & user profiles | ✅ Done |
+| Income & expense tracking | 🚧 Next |
 | Categories, budgets, goals | ⬜ Planned |
 | Dashboard & analytics | ⬜ Planned |
 | CSV import & reports | ⬜ Planned |
@@ -61,7 +62,9 @@ cd spendly-ai
 
 # 1. Configure environment
 cp .env.example .env          # PowerShell: Copy-Item .env.example .env
-#    then edit .env and set a local password
+#    then edit .env: set a local database password, and generate a SECRET_KEY:
+#    python -c "import secrets; print(secrets.token_urlsafe(48))"
+#    (the app refuses to start if SECRET_KEY is shorter than 32 characters)
 
 # 2. Start the database
 docker compose up -d
@@ -85,10 +88,32 @@ API docs at http://localhost:8000/docs
 
 ```bash
 cd backend
-uv run pytest                 # tests
+uv run pytest                 # tests (needs the database running)
 uv run ruff check .           # lint
-uv run mypy .                 # type check
+uv run mypy app/              # type check
 ```
+
+Tests run against the real PostgreSQL container. Each one executes inside a
+transaction that is always rolled back, so the suite leaves no rows behind.
+
+---
+
+## API
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/health` | — | Liveness. Checks no dependencies. |
+| `GET` | `/health/ready` | — | Readiness. 503 when the database is unreachable. |
+| `POST` | `/api/v1/auth/register` | — | Create an account. 409 if the email is taken. |
+| `POST` | `/api/v1/auth/login` | — | Exchange credentials for a bearer token. |
+| `GET` | `/api/v1/users/me` | Bearer | The authenticated user's profile. |
+
+Login takes `application/x-www-form-urlencoded` with `username` and `password`
+fields — the names RFC 6749 specifies, which is what makes the **Authorize**
+button in `/docs` work. Send `username` as the email address.
+
+Access tokens last 30 minutes and **cannot be revoked before they expire**;
+refresh tokens and real logout are a later slice.
 
 ---
 
