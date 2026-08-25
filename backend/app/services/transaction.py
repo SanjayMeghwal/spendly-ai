@@ -15,11 +15,18 @@ more than the response should.
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Transaction
+
+# Sentinel distinguishing "the caller did not mention this field" from "the
+# caller sent it as null". PATCH needs both: category and notes are nullable
+# columns, so `None` is a meaningful value (clear it), not merely "no
+# change". A plain `None` default could not tell those apart.
+_UNSET: Any = object()
 
 
 async def create_transaction(
@@ -93,3 +100,48 @@ async def get_transaction(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def update_transaction(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    transaction_id: uuid.UUID,
+    amount: Decimal | None = _UNSET,
+    description: str | None = _UNSET,
+    category: str | None = _UNSET,
+    occurred_at: datetime | None = _UNSET,
+    notes: str | None = _UNSET,
+) -> Transaction | None:
+    """Apply a partial update and return the updated row, or None if not found.
+
+    Callers pass `**payload.model_dump(exclude_unset=True)` from
+    TransactionUpdate, so a field absent from the request body never reaches
+    this function at all and keeps its `_UNSET` default - untouched. A field
+    the caller did send, even as `null`, arrives as that real value - except
+    for amount, description, and occurred_at, which TransactionUpdate's own
+    validator already refuses to accept as null, since they back NOT NULL
+    columns. The asserts below are that guarantee, made visible to mypy: a
+    Mapped[Decimal] column cannot be assigned `Decimal | None` without one.
+    """
+    transaction = await get_transaction(session, user_id=user_id, transaction_id=transaction_id)
+    if transaction is None:
+        return None
+
+    if amount is not _UNSET:
+        assert amount is not None
+        transaction.amount = amount
+    if description is not _UNSET:
+        assert description is not None
+        transaction.description = description
+    if category is not _UNSET:
+        transaction.category = category
+    if occurred_at is not _UNSET:
+        assert occurred_at is not None
+        transaction.occurred_at = occurred_at
+    if notes is not _UNSET:
+        transaction.notes = notes
+
+    await session.commit()
+    await session.refresh(transaction)
+    return transaction

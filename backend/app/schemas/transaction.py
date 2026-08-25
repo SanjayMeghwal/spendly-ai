@@ -10,7 +10,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TransactionCreate(BaseModel):
@@ -47,6 +47,39 @@ class TransactionCreate(BaseModel):
     # all invites a client to post something unreasonable and find out only
     # when the database complains.
     notes: str | None = Field(default=None, max_length=10_000, description="Optional notes.")
+
+
+class TransactionUpdate(BaseModel):
+    """Request body for PATCH /transactions/{id}.
+
+    Every field is optional, and that is the whole contract of a PATCH: the
+    caller sends only what changes, and anything omitted is left alone. A
+    field explicitly sent as `null` - where the type allows it - clears it.
+    """
+
+    amount: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
+    description: str | None = Field(default=None, min_length=1, max_length=255)
+    category: str | None = Field(default=None, max_length=100)
+    occurred_at: datetime | None = None
+    notes: str | None = Field(default=None, max_length=10_000)
+
+    # amount, description, and occurred_at map to NOT NULL columns.
+    # `Decimal | None` above exists only so the field can be OMITTED -
+    # Pydantic has no "optional but not nullable" annotation - but that same
+    # type would also accept an explicit `"amount": null`, which would reach
+    # the database as a NOT NULL violation (an unhandled 500) rather than a
+    # clean validation error.
+    #
+    # `mode="before"` and `validate_default=False` (pydantic's default)
+    # together mean this runs ONLY when the client actually sends the key -
+    # an omitted field never reaches this validator, so "don't mention it"
+    # still means "no change".
+    @field_validator("amount", "description", "occurred_at", mode="before")
+    @classmethod
+    def reject_explicit_null(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("must not be null - omit the field instead to leave it unchanged")
+        return value
 
 
 class TransactionRead(BaseModel):

@@ -17,8 +17,13 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession
-from app.schemas.transaction import TransactionCreate, TransactionRead
-from app.services.transaction import create_transaction, get_transaction, list_transactions
+from app.schemas.transaction import TransactionCreate, TransactionRead, TransactionUpdate
+from app.services.transaction import (
+    create_transaction,
+    get_transaction,
+    list_transactions,
+    update_transaction,
+)
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -91,6 +96,35 @@ async def get_one(
     db: DbSession,
 ) -> TransactionRead:
     transaction = await get_transaction(db, user_id=current_user.id, transaction_id=transaction_id)
+    if transaction is None:
+        raise _not_found()
+    return TransactionRead.model_validate(transaction)
+
+
+@router.patch(
+    "/{transaction_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=TransactionRead,
+    summary="Update one of the authenticated user's transactions",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No transaction with that id."}},
+)
+async def update(
+    transaction_id: uuid.UUID,
+    payload: TransactionUpdate,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> TransactionRead:
+    # exclude_unset, not exclude_none: a field the client omitted must be left
+    # alone, while a field sent explicitly as null (category, notes) must
+    # clear it. Only exclude_unset tells those two apart - see
+    # services/transaction.py's _UNSET sentinel, which is what actually reads
+    # this distinction.
+    transaction = await update_transaction(
+        db,
+        user_id=current_user.id,
+        transaction_id=transaction_id,
+        **payload.model_dump(exclude_unset=True),
+    )
     if transaction is None:
         raise _not_found()
     return TransactionRead.model_validate(transaction)
