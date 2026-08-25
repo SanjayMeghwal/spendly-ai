@@ -12,8 +12,9 @@ Add every new model module to this file.
 """
 
 from app.models.refresh_token import RefreshToken
+from app.models.transaction import Transaction
 from app.models.user import User
 
 # Re-exported names. Listing them explicitly tells linters these imports are
 # intentional rather than unused, and documents the package's public surface.
-__all__ = ["RefreshToken", "User"]
+__all__ = ["RefreshToken", "Transaction", "User"]
