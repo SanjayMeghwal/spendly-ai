@@ -12,11 +12,11 @@ request; scoping every service call by `current_user.id` instead means there
 is no id to confuse and no ownership check to forget.
 """
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.transaction import TransactionCreate, TransactionRead
-from app.services.transaction import create_transaction
+from app.services.transaction import create_transaction, list_transactions
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -42,3 +42,22 @@ async def create(
         notes=payload.notes,
     )
     return TransactionRead.model_validate(transaction)
+
+
+@router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    response_model=list[TransactionRead],
+    summary="List the authenticated user's transactions",
+)
+async def list_mine(
+    current_user: CurrentUser,
+    db: DbSession,
+    # le=100 caps a single response's size regardless of what a client asks
+    # for - an unbounded limit would let one request pull a user's entire
+    # transaction history in one query.
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> list[TransactionRead]:
+    transactions = await list_transactions(db, user_id=current_user.id, limit=limit, offset=offset)
+    return [TransactionRead.model_validate(t) for t in transactions]

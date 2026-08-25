@@ -16,6 +16,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Transaction
@@ -45,3 +46,29 @@ async def create_transaction(
     # Load created_at / updated_at, which PostgreSQL filled in during the INSERT.
     await session.refresh(transaction)
     return transaction
+
+
+async def list_transactions(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    limit: int,
+    offset: int,
+) -> list[Transaction]:
+    """Return one user's transactions, most recently occurred first.
+
+    Ordered by (occurred_at, id) rather than occurred_at alone. Two
+    transactions can share an occurred_at value (e.g. two backfilled entries
+    for the same day), and without a tiebreaker their relative order between
+    calls is merely whatever PostgreSQL feels like that time - which would
+    make pagination silently skip or repeat a row across pages. Ties break on
+    id, which is unique, so the order is always deterministic.
+    """
+    result = await session.execute(
+        select(Transaction)
+        .where(Transaction.user_id == user_id)
+        .order_by(Transaction.occurred_at.desc(), Transaction.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    return list(result.scalars().all())
