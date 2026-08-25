@@ -6,10 +6,11 @@ and goals, and get financial insight from a locally-hosted LLM.
 Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
-> **Status: early development.** Milestones 1 (walking skeleton) and 2
-> (authentication) are complete — the API, database, migrations, tests, and CI
-> pipeline all run end to end, and the auth flow issues, rotates, and revokes
-> tokens.
+> **Status: early development.** Milestones 1 (walking skeleton), 2
+> (authentication), and 3 (transactions) are complete — the API, database,
+> migrations, tests, and CI pipeline all run end to end, the auth flow issues,
+> rotates, and revokes tokens, and every user can record, list, edit, and
+> delete their own transactions.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -38,8 +39,8 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | Database migrations (Alembic) | ✅ Done |
 | CI pipeline (lint, types, migrations, tests) | ✅ Done |
 | Authentication & user profiles | ✅ Done |
-| Income & expense tracking | 🚧 Next |
-| Categories, budgets, goals | ⬜ Planned |
+| Income & expense tracking | ✅ Done |
+| Categories, budgets, goals | 🚧 Next |
 | Dashboard & analytics | ⬜ Planned |
 | CSV import & reports | ⬜ Planned |
 | AI financial assistant (RAG) | ⬜ Planned |
@@ -106,6 +107,11 @@ Interactive docs at `/docs` when `ENVIRONMENT` is not `production`.
 | `POST` | `/api/v1/auth/logout` | refresh token | End one session |
 | `POST` | `/api/v1/auth/logout-all` | access token | End every session on every device |
 | `GET` | `/api/v1/auth/me` | access token | The caller's own account |
+| `POST` | `/api/v1/transactions` | access token | Record a transaction |
+| `GET` | `/api/v1/transactions` | access token | List the caller's transactions, paginated |
+| `GET` | `/api/v1/transactions/{id}` | access token | Get one of the caller's transactions |
+| `PATCH` | `/api/v1/transactions/{id}` | access token | Partially update one of the caller's transactions |
+| `DELETE` | `/api/v1/transactions/{id}` | access token | Delete one of the caller's transactions |
 | `GET` | `/health` | — | Liveness — process is up |
 | `GET` | `/health/ready` | — | Readiness — database answers |
 
@@ -117,6 +123,14 @@ and rotated on every use: presenting an already-rotated token is treated as
 theft and revokes the whole family. `logout-all` bumps a per-user
 `token_version` carried as a JWT claim, so every outstanding access token
 becomes invalid at its next use without any blacklist.
+
+**Transactions.** Every transaction belongs to exactly one user, and every
+query is scoped by that ownership — a transaction id that exists but belongs
+to someone else answers 404, identical to an id that does not exist at all.
+Money is a signed `NUMERIC(12,2)`: negative is money out, positive is money
+in, so a balance is a single `SUM(amount)`. Updates are partial (`PATCH`):
+a field left out of the request body is untouched, while a nullable field
+(`category`, `notes`) sent explicitly as `null` is cleared.
 
 ---
 

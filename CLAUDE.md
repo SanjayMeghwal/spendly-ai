@@ -23,12 +23,13 @@ See "Working style" below — it is not optional.
 
 | | |
 |---|---|
-| Milestone | **2 — authentication and users** — complete |
+| Milestone | **3 — transactions** — complete |
 | Done (M1) | git hygiene · uv deps · Postgres+pgvector container · validated config · async engine + session · FastAPI app · liveness/readiness probes · Alembic (baseline) · CI |
 | Done (M2) | User + RefreshToken models · 3 migrations · Argon2id hashing · JWT access tokens · refresh rotation with reuse detection · logout · logout-all via `token_version` · `/me` · tests (210, 99%) |
-| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · health probes |
-| Next | **Milestone 3 — transactions**: money as `NUMERIC`, user-scoped queries, first owned resource |
-| Not started | budgets, frontend, AI (later milestones) |
+| Done (M3) | Transaction model (signed `NUMERIC(12,2)`, free-text category) · 1 migration · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` · tests (260, 99%) |
+| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · health probes |
+| Next | **Milestone 4 — budgets**: per-category limits, spend-vs-budget reporting |
+| Not started | frontend, AI (later milestones) |
 
 ---
 
