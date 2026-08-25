@@ -72,3 +72,24 @@ async def list_transactions(
         .offset(offset)
     )
     return list(result.scalars().all())
+
+
+async def get_transaction(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    transaction_id: uuid.UUID,
+) -> Transaction | None:
+    """Look up one transaction by id, scoped to its owner.
+
+    Returns None both when the id does not exist at all and when it belongs
+    to someone else - the two cases are indistinguishable on purpose. See the
+    module docstring.
+    """
+    result = await session.execute(
+        select(Transaction).where(
+            Transaction.id == transaction_id,
+            Transaction.user_id == user_id,
+        )
+    )
+    return result.scalar_one_or_none()

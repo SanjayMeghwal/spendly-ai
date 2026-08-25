@@ -12,13 +12,28 @@ request; scoping every service call by `current_user.id` instead means there
 is no id to confuse and no ownership check to forget.
 """
 
-from fastapi import APIRouter, Query, status
+import uuid
+
+from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.transaction import TransactionCreate, TransactionRead
-from app.services.transaction import create_transaction, list_transactions
+from app.services.transaction import create_transaction, get_transaction, list_transactions
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
+
+
+def _not_found() -> HTTPException:
+    """The single 404 for 'no such transaction of yours'.
+
+    Used both when the id does not exist at all and when it belongs to
+    another user - see app/services/transaction.py for why those two cases
+    must look identical to the caller.
+    """
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="No transaction with that id.",
+    )
 
 
 @router.post(
@@ -61,3 +76,21 @@ async def list_mine(
 ) -> list[TransactionRead]:
     transactions = await list_transactions(db, user_id=current_user.id, limit=limit, offset=offset)
     return [TransactionRead.model_validate(t) for t in transactions]
+
+
+@router.get(
+    "/{transaction_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=TransactionRead,
+    summary="Get one of the authenticated user's transactions",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No transaction with that id."}},
+)
+async def get_one(
+    transaction_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> TransactionRead:
+    transaction = await get_transaction(db, user_id=current_user.id, transaction_id=transaction_id)
+    if transaction is None:
+        raise _not_found()
+    return TransactionRead.model_validate(transaction)
