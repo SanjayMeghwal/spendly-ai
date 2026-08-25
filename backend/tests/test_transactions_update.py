@@ -77,6 +77,31 @@ class TestPartialUpdate:
         assert response.json()["amount"] == "100.00"
         assert response.json()["description"] == "Refund"
 
+    async def test_updates_occurred_at(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+        transaction = await add_transaction(db_session, user)
+        new_date = "2020-01-01T00:00:00Z"
+
+        response = await db_client.patch(
+            url(transaction.id), json={"occurred_at": new_date}, headers=auth(user)
+        )
+
+        assert response.status_code == 200
+        assert response.json()["occurred_at"] == new_date
+
+    async def test_updates_notes(self, db_client: AsyncClient, db_session: AsyncSession) -> None:
+        user = await register(db_session)
+        transaction = await add_transaction(db_session, user, notes="original")
+
+        response = await db_client.patch(
+            url(transaction.id), json={"notes": "revised"}, headers=auth(user)
+        )
+
+        assert response.status_code == 200
+        assert response.json()["notes"] == "revised"
+
     async def test_explicit_null_clears_a_nullable_field(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:

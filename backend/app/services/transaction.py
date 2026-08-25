@@ -145,3 +145,24 @@ async def update_transaction(
     await session.commit()
     await session.refresh(transaction)
     return transaction
+
+
+async def delete_transaction(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    transaction_id: uuid.UUID,
+) -> bool:
+    """Delete a transaction. Returns whether a row was actually deleted.
+
+    Hard delete: the row is gone, not marked. A transaction is deleted only
+    when its owner asks to remove a mistaken entry, and there is no audit or
+    undelete feature yet that would need the row to survive.
+    """
+    transaction = await get_transaction(session, user_id=user_id, transaction_id=transaction_id)
+    if transaction is None:
+        return False
+
+    await session.delete(transaction)
+    await session.commit()
+    return True

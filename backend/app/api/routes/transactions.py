@@ -20,6 +20,7 @@ from app.api.deps import CurrentUser, DbSession
 from app.schemas.transaction import TransactionCreate, TransactionRead, TransactionUpdate
 from app.services.transaction import (
     create_transaction,
+    delete_transaction,
     get_transaction,
     list_transactions,
     update_transaction,
@@ -128,3 +129,19 @@ async def update(
     if transaction is None:
         raise _not_found()
     return TransactionRead.model_validate(transaction)
+
+
+@router.delete(
+    "/{transaction_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete one of the authenticated user's transactions",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No transaction with that id."}},
+)
+async def delete(
+    transaction_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> None:
+    deleted = await delete_transaction(db, user_id=current_user.id, transaction_id=transaction_id)
+    if not deleted:
+        raise _not_found()
