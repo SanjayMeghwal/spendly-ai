@@ -20,6 +20,7 @@ from app.services.category import CategoryNotFound, get_category_names
 from app.services.goal import (
     GoalCategoryAlreadyExists,
     create_goal,
+    delete_goal,
     get_goal,
     list_goals,
     progress_for_category,
@@ -197,3 +198,19 @@ async def update(
         db, user_id=current_user.id, category_id=goal.category_id
     )
     return await _to_read_model(goal, names[goal.category_id], progress=progress)
+
+
+@router.delete(
+    "/{goal_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete one of the authenticated user's goals",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No goal with that id."}},
+)
+async def delete(
+    goal_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> None:
+    deleted = await delete_goal(db, user_id=current_user.id, goal_id=goal_id)
+    if not deleted:
+        raise _not_found()
