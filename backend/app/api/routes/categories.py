@@ -13,12 +13,13 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession
-from app.schemas.category import CategoryCreate, CategoryRead
+from app.schemas.category import CategoryCreate, CategoryRead, CategoryUpdate
 from app.services.category import (
     CategoryNameAlreadyExists,
     create_category,
     get_category,
     list_categories,
+    update_category,
 )
 
 router = APIRouter(prefix="/categories", tags=["categories"])
@@ -82,6 +83,41 @@ async def get_one(
     db: DbSession,
 ) -> CategoryRead:
     category = await get_category(db, user_id=current_user.id, category_id=category_id)
+    if category is None:
+        raise _not_found()
+    return CategoryRead.model_validate(category)
+
+
+@router.patch(
+    "/{category_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=CategoryRead,
+    summary="Rename one of the authenticated user's categories",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "No category with that id."},
+        status.HTTP_409_CONFLICT: {"description": "A category with this name already exists."},
+    },
+)
+async def update(
+    category_id: uuid.UUID,
+    payload: CategoryUpdate,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> CategoryRead:
+    # exclude_unset, not exclude_none: a field the client omitted must be
+    # left alone. `name` can never be sent as null - CategoryUpdate's own
+    # validator already rejects that - so there is no "clear this field"
+    # case to distinguish, only "changed" vs "not mentioned". See
+    # services/category.py's _UNSET sentinel, which reads that distinction.
+    try:
+        category = await update_category(
+            db,
+            user_id=current_user.id,
+            category_id=category_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+    except CategoryNameAlreadyExists:
+        raise _conflict() from None
     if category is None:
         raise _not_found()
     return CategoryRead.model_validate(category)
