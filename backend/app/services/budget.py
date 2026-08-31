@@ -11,12 +11,22 @@ get_budget below.
 import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Budget, Transaction
+
+# Sentinel distinguishing "the caller did not mention this field" from "the
+# caller sent it as null", matching services/transaction.py's _UNSET exactly.
+# Unlike Transaction's category and notes, neither of Budget's mutable fields
+# is nullable - BudgetUpdate's reject_explicit_null validator already refuses
+# an explicit null before this module ever sees one - but the same sentinel
+# is still needed to tell "omitted" from "sent", which a plain None default
+# cannot do.
+_UNSET: Any = object()
 
 
 class BudgetCategoryAlreadyExists(Exception):
@@ -98,6 +108,50 @@ async def get_budget(
         select(Budget).where(Budget.id == budget_id, Budget.user_id == user_id)
     )
     return result.scalar_one_or_none()
+
+
+async def update_budget(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    budget_id: uuid.UUID,
+    category: str | None = _UNSET,
+    limit_amount: Decimal | None = _UNSET,
+) -> Budget | None:
+    """Apply a partial update and return the updated row, or None if not found.
+
+    Callers pass `**payload.model_dump(exclude_unset=True)` from
+    BudgetUpdate, so a field absent from the request body never reaches this
+    function and keeps its `_UNSET` default - untouched. Both category and
+    limit_amount back NOT NULL columns, and BudgetUpdate's own validator
+    already refuses either as null - the asserts below make that guarantee
+    visible to mypy, same as update_transaction's.
+
+    Raises:
+        BudgetCategoryAlreadyExists: renaming to `category` would collide
+            with another budget of this user's, case-insensitively.
+    """
+    budget = await get_budget(session, user_id=user_id, budget_id=budget_id)
+    if budget is None:
+        return None
+
+    if category is not _UNSET:
+        assert category is not None
+        budget.category = category
+    if limit_amount is not _UNSET:
+        assert limit_amount is not None
+        budget.limit_amount = limit_amount
+
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        if _is_unique_violation(exc):
+            raise BudgetCategoryAlreadyExists(category) from exc
+        raise
+
+    await session.refresh(budget)
+    return budget
 
 
 async def list_budgets(session: AsyncSession, *, user_id: uuid.UUID) -> list[Budget]:

@@ -15,13 +15,14 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession
 from app.models import Budget
-from app.schemas.budget import BudgetCreate, BudgetRead
+from app.schemas.budget import BudgetCreate, BudgetRead, BudgetUpdate
 from app.services.budget import (
     BudgetCategoryAlreadyExists,
     create_budget,
     get_budget,
     list_budgets,
     spent_for_category,
+    update_budget,
 )
 
 router = APIRouter(prefix="/budgets", tags=["budgets"])
@@ -42,6 +43,19 @@ _MONTH_QUERY = Query(
 def _not_found() -> HTTPException:
     """The single 404 for 'no such budget of yours', matching transactions.py."""
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No budget with that id.")
+
+
+def _conflict() -> HTTPException:
+    """The single 409 for 'you already have a budget for that category'.
+
+    Shared by create (a brand new category collides) and update (renaming
+    into a category collides), since both raise the same
+    BudgetCategoryAlreadyExists domain exception.
+    """
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="A budget for this category already exists.",
+    )
 
 
 def _resolve_month(month: str | None) -> tuple[int, int]:
@@ -96,10 +110,7 @@ async def create(
             limit_amount=payload.limit_amount,
         )
     except BudgetCategoryAlreadyExists:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A budget for this category already exists.",
-        ) from None
+        raise _conflict() from None
     # A freshly created budget is always reported against the CURRENT month -
     # there is no month to choose yet from the request, unlike GET.
     year, month = _resolve_month(None)
@@ -140,3 +151,40 @@ async def get_one(
         raise _not_found()
     year, resolved_month = _resolve_month(month)
     return await _to_read_model(db, budget, year=year, month=resolved_month)
+
+
+@router.patch(
+    "/{budget_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=BudgetRead,
+    summary="Update one of the authenticated user's budgets",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "No budget with that id."},
+        status.HTTP_409_CONFLICT: {"description": "A budget for this category already exists."},
+    },
+)
+async def update(
+    budget_id: uuid.UUID,
+    payload: BudgetUpdate,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> BudgetRead:
+    # exclude_unset, not exclude_none: a field the client omitted must be
+    # left alone. Unlike TransactionUpdate, neither field here can ever be
+    # sent as null - BudgetUpdate's own validator already rejects that - so
+    # there is no "clear this field" case to distinguish, only "changed" vs
+    # "not mentioned". See services/budget.py's _UNSET sentinel, which reads
+    # that distinction.
+    try:
+        budget = await update_budget(
+            db,
+            user_id=current_user.id,
+            budget_id=budget_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+    except BudgetCategoryAlreadyExists:
+        raise _conflict() from None
+    if budget is None:
+        raise _not_found()
+    year, month = _resolve_month(None)
+    return await _to_read_model(db, budget, year=year, month=month)
