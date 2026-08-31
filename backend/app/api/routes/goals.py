@@ -15,7 +15,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession
 from app.models import Goal
-from app.schemas.goal import GoalCreate, GoalRead
+from app.schemas.goal import GoalCreate, GoalRead, GoalUpdate
 from app.services.category import CategoryNotFound, get_category_names
 from app.services.goal import (
     GoalCategoryAlreadyExists,
@@ -23,6 +23,7 @@ from app.services.goal import (
     get_goal,
     list_goals,
     progress_for_category,
+    update_goal,
 )
 
 router = APIRouter(prefix="/goals", tags=["goals"])
@@ -146,6 +147,49 @@ async def get_one(
     db: DbSession,
 ) -> GoalRead:
     goal = await get_goal(db, user_id=current_user.id, goal_id=goal_id)
+    if goal is None:
+        raise _not_found()
+    names = await get_category_names(db, user_id=current_user.id, category_ids={goal.category_id})
+    progress = await progress_for_category(
+        db, user_id=current_user.id, category_id=goal.category_id
+    )
+    return await _to_read_model(goal, names[goal.category_id], progress=progress)
+
+
+@router.patch(
+    "/{goal_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=GoalRead,
+    summary="Update one of the authenticated user's goals",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "No goal with that id."},
+        status.HTTP_409_CONFLICT: {"description": "A goal for this category already exists."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "category_id does not refer to one of your categories."
+        },
+    },
+)
+async def update(
+    goal_id: uuid.UUID,
+    payload: GoalUpdate,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> GoalRead:
+    # exclude_unset, not exclude_none: a field the client omitted must be
+    # left alone, while target_date sent explicitly as null must clear it.
+    # Only exclude_unset tells those two apart - see services/goal.py's
+    # _UNSET sentinel, which is what actually reads this distinction.
+    try:
+        goal = await update_goal(
+            db,
+            user_id=current_user.id,
+            goal_id=goal_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+    except CategoryNotFound:
+        raise _invalid_category() from None
+    except GoalCategoryAlreadyExists:
+        raise _conflict() from None
     if goal is None:
         raise _not_found()
     names = await get_category_names(db, user_id=current_user.id, category_ids={goal.category_id})
