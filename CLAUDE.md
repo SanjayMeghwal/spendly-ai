@@ -23,12 +23,13 @@ See "Working style" below — it is not optional.
 
 | | |
 |---|---|
-| Milestone | **3 — transactions** — complete |
+| Milestone | **4 — budgets** — complete |
 | Done (M1) | git hygiene · uv deps · Postgres+pgvector container · validated config · async engine + session · FastAPI app · liveness/readiness probes · Alembic (baseline) · CI |
 | Done (M2) | User + RefreshToken models · 3 migrations · Argon2id hashing · JWT access tokens · refresh rotation with reuse detection · logout · logout-all via `token_version` · `/me` · tests (210, 99%) |
 | Done (M3) | Transaction model (signed `NUMERIC(12,2)`, free-text category) · 1 migration · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` · tests (260, 99%) |
-| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · health probes |
-| Next | **Milestone 4 — budgets**: per-category limits, spend-vs-budget reporting |
+| Done (M4) | Budget model (positive `NUMERIC(12,2)` limit, case-insensitive unique category per user) · 1 migration · full CRUD · spend-vs-limit computed live from `transactions`, case-insensitive category match, net signed sum, per calendar month · tests (328, 99%) |
+| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · health probes |
+| Next | **Milestone 5**: not yet planned |
 | Not started | frontend, AI (later milestones) |
 
 ---

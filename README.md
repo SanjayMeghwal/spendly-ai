@@ -7,10 +7,11 @@ Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
 > **Status: early development.** Milestones 1 (walking skeleton), 2
-> (authentication), and 3 (transactions) are complete — the API, database,
-> migrations, tests, and CI pipeline all run end to end, the auth flow issues,
-> rotates, and revokes tokens, and every user can record, list, edit, and
-> delete their own transactions.
+> (authentication), 3 (transactions), and 4 (budgets) are complete — the API,
+> database, migrations, tests, and CI pipeline all run end to end, the auth
+> flow issues, rotates, and revokes tokens, every user can record, list, edit,
+> and delete their own transactions, and every user can set a monthly
+> spending limit per category and see how their actual spend compares.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -40,7 +41,8 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | CI pipeline (lint, types, migrations, tests) | ✅ Done |
 | Authentication & user profiles | ✅ Done |
 | Income & expense tracking | ✅ Done |
-| Categories, budgets, goals | 🚧 Next |
+| Budgets | ✅ Done |
+| Categories, goals | ⬜ Planned |
 | Dashboard & analytics | ⬜ Planned |
 | CSV import & reports | ⬜ Planned |
 | AI financial assistant (RAG) | ⬜ Planned |
@@ -112,6 +114,11 @@ Interactive docs at `/docs` when `ENVIRONMENT` is not `production`.
 | `GET` | `/api/v1/transactions/{id}` | access token | Get one of the caller's transactions |
 | `PATCH` | `/api/v1/transactions/{id}` | access token | Partially update one of the caller's transactions |
 | `DELETE` | `/api/v1/transactions/{id}` | access token | Delete one of the caller's transactions |
+| `POST` | `/api/v1/budgets` | access token | Set a monthly spending limit for a category |
+| `GET` | `/api/v1/budgets` | access token | List the caller's budgets, each with this month's spend |
+| `GET` | `/api/v1/budgets/{id}` | access token | Get one of the caller's budgets, with a month's spend |
+| `PATCH` | `/api/v1/budgets/{id}` | access token | Partially update one of the caller's budgets |
+| `DELETE` | `/api/v1/budgets/{id}` | access token | Delete one of the caller's budgets |
 | `GET` | `/health` | — | Liveness — process is up |
 | `GET` | `/health/ready` | — | Readiness — database answers |
 
@@ -131,6 +138,16 @@ Money is a signed `NUMERIC(12,2)`: negative is money out, positive is money
 in, so a balance is a single `SUM(amount)`. Updates are partial (`PATCH`):
 a field left out of the request body is untouched, while a nullable field
 (`category`, `notes`) sent explicitly as `null` is cleared.
+
+**Budgets.** A budget is a monthly spending limit for one category, matched
+against `transactions.category` case-insensitively (there is no separate
+Categories resource yet — both remain free-text). A user can have at most
+one budget per category; renaming into a name that collides, in either case,
+is rejected as `409`. `spent` is not a stored column — it is computed on
+every read as the net signed sum of that category's transactions for the
+requested month (defaulting to the current UTC month, or `?month=YYYY-MM`
+on either `GET`), so a refund automatically offsets spend rather than being
+ignored.
 
 ---
 
