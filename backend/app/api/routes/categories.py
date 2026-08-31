@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, status
 
 from app.api.deps import CurrentUser, DbSession
 from app.schemas.category import CategoryCreate, CategoryRead
-from app.services.category import CategoryNameAlreadyExists, create_category
+from app.services.category import CategoryNameAlreadyExists, create_category, list_categories
 
 router = APIRouter(prefix="/categories", tags=["categories"])
 
@@ -44,3 +44,14 @@ async def create(
     except CategoryNameAlreadyExists:
         raise _conflict() from None
     return CategoryRead.model_validate(category)
+
+
+@router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    response_model=list[CategoryRead],
+    summary="List the authenticated user's categories",
+)
+async def list_mine(current_user: CurrentUser, db: DbSession) -> list[CategoryRead]:
+    categories = await list_categories(db, user_id=current_user.id)
+    return [CategoryRead.model_validate(c) for c in categories]
