@@ -7,13 +7,15 @@ Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
 > **Status: early development.** Milestones 1 (walking skeleton), 2
-> (authentication), 3 (transactions), 4 (budgets), and 5 (categories) are
-> complete — the API, database, migrations, tests, and CI pipeline all run
-> end to end, the auth flow issues, rotates, and revokes tokens, every user
-> can record, list, edit, and delete their own transactions, every user can
-> set a monthly spending limit per category and see how their actual spend
-> compares, and categories are now a real resource — renameable, with
-> transactions moved out of one before it's deleted — rather than free text.
+> (authentication), 3 (transactions), 4 (budgets), 5 (categories), and 6
+> (goals) are complete — the API, database, migrations, tests, and CI
+> pipeline all run end to end, the auth flow issues, rotates, and revokes
+> tokens, every user can record, list, edit, and delete their own
+> transactions, every user can set a monthly spending limit per category
+> and see how their actual spend compares, categories are a real resource
+> — renameable, with transactions moved out of one before it's deleted —
+> rather than free text, and every user can set a savings target per
+> category and see live progress toward it.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -45,7 +47,7 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | Income & expense tracking | ✅ Done |
 | Budgets | ✅ Done |
 | Categories | ✅ Done |
-| Goals | ⬜ Planned |
+| Goals | ✅ Done |
 | Dashboard & analytics | ⬜ Planned |
 | CSV import & reports | ⬜ Planned |
 | AI financial assistant (RAG) | ⬜ Planned |
@@ -127,6 +129,11 @@ Interactive docs at `/docs` when `ENVIRONMENT` is not `production`.
 | `GET` | `/api/v1/categories/{id}` | access token | Get one of the caller's categories |
 | `PATCH` | `/api/v1/categories/{id}` | access token | Rename one of the caller's categories |
 | `DELETE` | `/api/v1/categories/{id}` | access token | Delete a category (`?reassign_to=` moves its transactions first) |
+| `POST` | `/api/v1/goals` | access token | Create a savings goal for a category |
+| `GET` | `/api/v1/goals` | access token | List the caller's goals, each with live progress |
+| `GET` | `/api/v1/goals/{id}` | access token | Get one of the caller's goals, with live progress |
+| `PATCH` | `/api/v1/goals/{id}` | access token | Partially update one of the caller's goals |
+| `DELETE` | `/api/v1/goals/{id}` | access token | Delete one of the caller's goals |
 | `GET` | `/health` | — | Liveness — process is up |
 | `GET` | `/health/ready` | — | Readiness — database answers |
 
@@ -159,16 +166,28 @@ requested month (defaulting to the current UTC month, or `?month=YYYY-MM`
 on either `GET`), so a refund automatically offsets spend rather than being
 ignored.
 
-**Categories.** A real, renameable resource — `Transaction.category_id` and
-`Budget.category_id` are both foreign keys into it, not free text, so a
-rename is a single-row update rather than a bulk rewrite. Names are unique
-per user, case-insensitively. Deleting a category is deliberately not a
-plain cascade: a category with an **active budget** always blocks deletion
-— merging two budgets' limits isn't something to do automatically, so the
-budget has to be deleted or repointed first. A category with
-**transactions** blocks deletion unless the request supplies
-`?reassign_to=<category_id>`, which moves every matching transaction to the
-target category in the same operation as the delete.
+**Categories.** A real, renameable resource — `Transaction.category_id`,
+`Budget.category_id`, and `Goal.category_id` are all foreign keys into it,
+not free text, so a rename is a single-row update rather than a bulk
+rewrite. Names are unique per user, case-insensitively. Deleting a category
+is deliberately not a plain cascade: a category with an **active budget or
+goal** always blocks deletion — merging two budgets' limits, or two goals'
+progress, isn't something to do automatically, so the budget/goal has to be
+deleted or repointed first. A category with **transactions** blocks
+deletion unless the request supplies `?reassign_to=<category_id>`, which
+moves every matching transaction to the target category in the same
+operation as the delete.
+
+**Goals.** A savings target for one category, referenced by `category_id`.
+A user can have at most one goal per category. `progress` is not a stored
+column — it is computed on every read as the net signed sum of that
+category's transactions, using the same sign convention as a budget's
+`spent` (money flowing in reads positive), but cumulatively rather than
+per calendar month: there is no `?month=` parameter here at all, since a
+goal has no reset period. `remaining` (`target_amount - progress`) is
+shown uncapped when a goal is overshot rather than clamped at zero.
+`target_date` is optional and, unlike `category_id`/`target_amount`, can be
+cleared by sending it explicitly as `null` in a `PATCH`.
 
 ---
 

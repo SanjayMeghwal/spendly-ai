@@ -23,26 +23,26 @@ See "Working style" below — it is not optional.
 
 | | |
 |---|---|
-| Milestone | **5 — categories** — complete |
+| Milestone | **6 — goals** — complete |
 | Done (M1) | git hygiene · uv deps · Postgres+pgvector container · validated config · async engine + session · FastAPI app · liveness/readiness probes · Alembic (baseline) · CI |
 | Done (M2) | User + RefreshToken models · 3 migrations · Argon2id hashing · JWT access tokens · refresh rotation with reuse detection · logout · logout-all via `token_version` · `/me` · tests (210, 99%) |
 | Done (M3) | Transaction model (signed `NUMERIC(12,2)`) · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` |
 | Done (M4) | Budget model (positive `NUMERIC(12,2)` limit) · full CRUD · spend-vs-limit computed live from `transactions`, net signed sum, per calendar month |
-| Done (M5) | Category model (case-insensitive unique name per user) · full CRUD · `Transaction`/`Budget` cut over from free-text `category` to a real `category_id` FK via a 4-migration expand/contract sequence · reads denormalize `category_name` via a bulk lookup (no N+1) · `DELETE /categories/{id}` reassigns transactions (`?reassign_to=`) but always blocks on an active budget · tests (397, 99%) |
-| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · health probes |
-| Next | **Milestone 6 — goals**: mirrors Budget's shape (target amount, target date, progress computed live) |
+| Done (M5) | Category model (case-insensitive unique name per user) · full CRUD · `Transaction`/`Budget` cut over from free-text `category` to a real `category_id` FK via a 4-migration expand/contract sequence · reads denormalize `category_name` via a bulk lookup (no N+1) · `DELETE /categories/{id}` reassigns transactions (`?reassign_to=`) but always blocks on an active budget |
+| Done (M6) | Goal model (positive `NUMERIC(12,2)` target, optional `Date` deadline) · full CRUD · progress computed live from `transactions`, same sign convention as Budget's `spent` but cumulative, no month window · `remaining` shown uncapped when overshot · `delete_category` extended to block on an active goal, same as it already did for budgets · tests (471, 99%) |
+| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · `POST/GET /goals` `GET/PATCH/DELETE /goals/{id}` · health probes |
+| Next | **Milestone 7 — reporting API**: read-only aggregation over existing data, prerequisite for a dashboard |
 
 ---
 
-## Roadmap (M6+)
+## Roadmap (M7+)
 
-Sketched 2026-08-31, not yet started past M6. Sized to match M1–M5's own
+Sketched 2026-08-31, not yet started past M6. Sized to match M1–M6's own
 granularity — one coherent resource or capability per milestone. Revisit
 before starting each one; this is a plan, not a commitment.
 
 | # | Milestone | Covers |
 |---|---|---|
-| 6 | Goals | New resource, mirrors `Budget` — target amount/date, live progress |
 | 7 | Reporting API | Read-only aggregation over existing data (spend by category over time, month-over-month, balance trend) — prerequisite for a dashboard |
 | 8 | CSV import | Bulk transaction creation from an uploaded file — parsing, validation, de-dup |
 | 9 | Frontend MVP | React/TS/Vite/Tailwind — auth + CRUD screens for every resource so far + dashboard on M7's endpoints. First demoable product. |
@@ -50,12 +50,8 @@ before starting each one; this is a plan, not a commitment.
 | 11 | AI: RAG chat | Natural-language Q&A over a user's finances — backend endpoint + chat UI |
 | 12 | Multi-agent orchestration | LangGraph agents on M10/M11 — e.g. auto-categorization suggestions, a budget-advisor agent |
 
-Two judgment calls baked into this order, worth revisiting if priorities
+One judgment call baked into this order, worth revisiting if priorities
 change:
-- **Goals (M6) before Frontend (M9), not after** — matches M3–M5's
-  backend-first pattern. The alternative is shipping Frontend MVP earlier
-  to get a visible demo sooner, with Goals added as a full-stack feature
-  later.
 - **Frontend is one MVP milestone, not split per-resource** — a frontend
   with auth but no way to see your data isn't a usable product. The
   alternative is mirroring the backend's own history (`frontend-auth`,
