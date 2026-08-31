@@ -8,6 +8,7 @@ OWNER, matching app/api/routes/transactions.py exactly - see that module's
 docstring for the full reasoning.
 """
 
+import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Query, status
@@ -18,17 +19,29 @@ from app.schemas.budget import BudgetCreate, BudgetRead
 from app.services.budget import (
     BudgetCategoryAlreadyExists,
     create_budget,
+    get_budget,
     list_budgets,
     spent_for_category,
 )
 
 router = APIRouter(prefix="/budgets", tags=["budgets"])
 
-# YYYY-MM, matching what _resolve_month below parses. Enforced here, not in
-# _resolve_month, so an invalid month reaches the caller as a clean 422 from
-# FastAPI's own query validation, rather than a ValueError raised deep in
-# int(month.split("-")[1]).
-_MONTH_PATTERN = r"^\d{4}-(0[1-9]|1[0-2])$"
+# Shared query parameter definition for every handler that accepts ?month=,
+# so GET /budgets and GET /budgets/{id} document and validate it identically.
+# The pattern is enforced here, not in _resolve_month, so an invalid month
+# reaches the caller as a clean 422 from FastAPI's own query validation,
+# rather than a ValueError raised deep in int(month.split("-")[1]).
+_MONTH_QUERY = Query(
+    default=None,
+    pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
+    description="YYYY-MM. Defaults to the current UTC month.",
+    examples=["2026-08"],
+)
+
+
+def _not_found() -> HTTPException:
+    """The single 404 for 'no such budget of yours', matching transactions.py."""
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No budget with that id.")
 
 
 def _resolve_month(month: str | None) -> tuple[int, int]:
@@ -102,13 +115,28 @@ async def create(
 async def list_mine(
     current_user: CurrentUser,
     db: DbSession,
-    month: str | None = Query(
-        default=None,
-        pattern=_MONTH_PATTERN,
-        description="YYYY-MM. Defaults to the current UTC month.",
-        examples=["2026-08"],
-    ),
+    month: str | None = _MONTH_QUERY,
 ) -> list[BudgetRead]:
     year, resolved_month = _resolve_month(month)
     budgets = await list_budgets(db, user_id=current_user.id)
     return [await _to_read_model(db, budget, year=year, month=resolved_month) for budget in budgets]
+
+
+@router.get(
+    "/{budget_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=BudgetRead,
+    summary="Get one of the authenticated user's budgets, with this month's status",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No budget with that id."}},
+)
+async def get_one(
+    budget_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+    month: str | None = _MONTH_QUERY,
+) -> BudgetRead:
+    budget = await get_budget(db, user_id=current_user.id, budget_id=budget_id)
+    if budget is None:
+        raise _not_found()
+    year, resolved_month = _resolve_month(month)
+    return await _to_read_model(db, budget, year=year, month=resolved_month)

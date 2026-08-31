@@ -5,7 +5,7 @@ LAYERING - this module must never import FastAPI, matching services/transaction.
 EVERY QUERY HERE FILTERS BY user_id. Same reasoning as
 services/transaction.py: a query against this table that omits it is a data
 leak, and "not mine" must look identical to "does not exist" - see
-get_budget once it's added in a later commit.
+get_budget below.
 """
 
 import uuid
@@ -80,6 +80,24 @@ async def create_budget(
     # Load created_at / updated_at, which PostgreSQL filled in during the INSERT.
     await session.refresh(budget)
     return budget
+
+
+async def get_budget(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    budget_id: uuid.UUID,
+) -> Budget | None:
+    """Look up one budget by id, scoped to its owner.
+
+    Returns None both when the id does not exist at all and when it belongs
+    to someone else - the two cases are indistinguishable on purpose, same
+    reasoning as get_transaction.
+    """
+    result = await session.execute(
+        select(Budget).where(Budget.id == budget_id, Budget.user_id == user_id)
+    )
+    return result.scalar_one_or_none()
 
 
 async def list_budgets(session: AsyncSession, *, user_id: uuid.UUID) -> list[Budget]:
