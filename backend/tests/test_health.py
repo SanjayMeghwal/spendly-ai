@@ -124,6 +124,7 @@ class TestApiSurface:
             "/api/v1/auth/me",
             "/api/v1/transactions",
             "/api/v1/transactions/{transaction_id}",
+            "/api/v1/budgets",
         }
 
     async def test_docs_are_available_outside_production(self, client: AsyncClient) -> None:
