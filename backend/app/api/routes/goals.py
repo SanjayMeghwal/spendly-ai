@@ -16,7 +16,12 @@ from app.api.deps import CurrentUser, DbSession
 from app.models import Goal
 from app.schemas.goal import GoalCreate, GoalRead
 from app.services.category import CategoryNotFound, get_category_names
-from app.services.goal import GoalCategoryAlreadyExists, create_goal, progress_for_category
+from app.services.goal import (
+    GoalCategoryAlreadyExists,
+    create_goal,
+    list_goals,
+    progress_for_category,
+)
 
 router = APIRouter(prefix="/goals", tags=["goals"])
 
@@ -92,3 +97,30 @@ async def create(
         db, user_id=current_user.id, category_id=goal.category_id
     )
     return await _to_read_model(goal, names[goal.category_id], progress=progress)
+
+
+@router.get(
+    "",
+    status_code=status.HTTP_200_OK,
+    response_model=list[GoalRead],
+    summary="List the authenticated user's goals, with progress",
+)
+async def list_mine(current_user: CurrentUser, db: DbSession) -> list[GoalRead]:
+    goals = await list_goals(db, user_id=current_user.id)
+    names = await get_category_names(
+        db, user_id=current_user.id, category_ids={g.category_id for g in goals}
+    )
+    results = [
+        await _to_read_model(
+            goal,
+            names[goal.category_id],
+            progress=await progress_for_category(
+                db, user_id=current_user.id, category_id=goal.category_id
+            ),
+        )
+        for goal in goals
+    ]
+    # list_goals has no natural ordering of its own (category is a
+    # category_id, not a string) - sorting on the resolved name happens
+    # here, once the name is actually known, same as budgets.py's list_mine.
+    return sorted(results, key=lambda r: r.category_name)
