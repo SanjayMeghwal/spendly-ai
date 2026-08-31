@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import NamedTuple
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Category, Transaction
@@ -99,3 +99,89 @@ async def spend_by_category(
         .order_by(spent_expr.desc())
     )
     return [CategorySpendRow(*row) for row in result.all()]
+
+
+class MonthlySummaryRow(NamedTuple):
+    """One calendar month's income and expenses, as returned by monthly_summary."""
+
+    year: int
+    month: int
+    income: Decimal
+    expenses: Decimal
+
+
+def _months_back(year: int, month: int, n: int) -> list[tuple[int, int]]:
+    """The n calendar months ending at (year, month) inclusive, oldest first.
+
+    Plain integer arithmetic rather than a date library helper - `month`
+    wraps from 1 to 12 and `year` decrements on the wrap, the same
+    December-into-January case _month_bounds handles, just walked backward
+    instead of forward.
+    """
+    months = []
+    y, m = year, month
+    for _ in range(n):
+        months.append((y, m))
+        m -= 1
+        if m == 0:
+            m, y = 12, y - 1
+    return list(reversed(months))
+
+
+async def monthly_summary(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    months: int,
+) -> list[MonthlySummaryRow]:
+    """Income, expenses, and (implicitly) net for each of the last `months`
+    calendar months, ending with the current UTC month, oldest first.
+
+    `income` is the sum of positive amounts and `expenses` is the sum of
+    negative amounts negated to a positive magnitude - unlike
+    spend_by_category's single net figure, a trend chart wants both bars
+    visible, not just their difference. `net` is not computed here; the
+    route derives it as `income - expenses`, the same "service returns raw
+    data, route assembles the schema" split used throughout this codebase.
+
+    A month with no transactions at all is absent from the SQL result
+    (GROUP BY only returns months that have rows) but is NOT absent from
+    the return value - it is zero-filled here so a quiet month shows as a
+    flat zero in a trend chart instead of vanishing from the x-axis.
+    """
+    month_list = _months_back(*_current_year_month(), months)
+    start, _ = _month_bounds(*month_list[0])
+    _, end = _month_bounds(*month_list[-1])
+
+    month_expr = func.date_trunc("month", Transaction.occurred_at)
+    income_expr = func.sum(case((Transaction.amount > 0, Transaction.amount), else_=0))
+    expenses_expr = -func.sum(case((Transaction.amount < 0, Transaction.amount), else_=0))
+    result = await session.execute(
+        select(
+            month_expr.label("month"),
+            income_expr.label("income"),
+            expenses_expr.label("expenses"),
+        )
+        .where(
+            Transaction.user_id == user_id,
+            Transaction.occurred_at >= start,
+            Transaction.occurred_at < end,
+        )
+        .group_by(month_expr)
+    )
+    rows_by_month = {(row.month.year, row.month.month): row for row in result.all()}
+
+    return [
+        MonthlySummaryRow(
+            year=y,
+            month=m,
+            income=rows_by_month[(y, m)].income if (y, m) in rows_by_month else Decimal("0"),
+            expenses=rows_by_month[(y, m)].expenses if (y, m) in rows_by_month else Decimal("0"),
+        )
+        for y, m in month_list
+    ]
+
+
+def _current_year_month() -> tuple[int, int]:
+    now = datetime.now(UTC)
+    return now.year, now.month

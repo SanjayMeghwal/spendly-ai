@@ -17,8 +17,8 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Query, status
 
 from app.api.deps import CurrentUser, DbSession
-from app.schemas.report import CategorySpend
-from app.services.report import spend_by_category
+from app.schemas.report import CategorySpend, MonthlySummary
+from app.services.report import monthly_summary, spend_by_category
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -30,6 +30,15 @@ _MONTH_QUERY = Query(
     pattern=r"^\d{4}-(0[1-9]|1[0-2])$",
     description="YYYY-MM. Defaults to the current UTC month.",
     examples=["2026-08"],
+)
+
+# Same capping philosophy as TransactionRead's list `limit` - bound the
+# response size regardless of what's asked for.
+_MONTHS_QUERY = Query(
+    default=6,
+    ge=1,
+    le=24,
+    description="How many calendar months to include, ending with the current UTC month.",
 )
 
 
@@ -66,6 +75,29 @@ async def get_spend_by_category(
             category_id=row.category_id,
             category_name=row.category_name if row.category_name is not None else "Uncategorized",
             spent=row.spent,
+        )
+        for row in rows
+    ]
+
+
+@router.get(
+    "/monthly-summary",
+    status_code=status.HTTP_200_OK,
+    response_model=list[MonthlySummary],
+    summary="Income, expenses, and net for each of the last N months, oldest first",
+)
+async def get_monthly_summary(
+    current_user: CurrentUser,
+    db: DbSession,
+    months: int = _MONTHS_QUERY,
+) -> list[MonthlySummary]:
+    rows = await monthly_summary(db, user_id=current_user.id, months=months)
+    return [
+        MonthlySummary(
+            month=f"{row.year:04d}-{row.month:02d}",
+            income=row.income,
+            expenses=row.expenses,
+            net=row.income - row.expenses,
         )
         for row in rows
     ]
