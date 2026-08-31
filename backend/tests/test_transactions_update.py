@@ -9,7 +9,8 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
-from app.models import Transaction, User
+from app.models import Category, Transaction, User
+from app.services.category import create_category
 from app.services.transaction import create_transaction
 from app.services.user import create_user
 
@@ -25,11 +26,14 @@ def auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def add_category(session: AsyncSession, user: User, *, name: str = "Groceries") -> Category:
+    return await create_category(session, user_id=user.id, name=name)
+
+
 async def add_transaction(session: AsyncSession, user: User, **overrides: object) -> Transaction:
     fields: dict[str, object] = {
         "amount": Decimal("-12.50"),
         "description": "Grocery store",
-        "category": "Groceries",
         "notes": "Weekly shop",
         "occurred_at": datetime.now(UTC),
     }
@@ -48,7 +52,8 @@ class TestPartialUpdate:
     ) -> None:
         """A PATCH that names one field must leave every other field alone."""
         user = await register(db_session)
-        transaction = await add_transaction(db_session, user)
+        category = await add_category(db_session, user)
+        transaction = await add_transaction(db_session, user, category_id=category.id)
 
         response = await db_client.patch(
             url(transaction.id), json={"description": "Updated"}, headers=auth(user)
@@ -58,7 +63,7 @@ class TestPartialUpdate:
         body = response.json()
         assert body["description"] == "Updated"
         assert body["amount"] == "-12.50"
-        assert body["category"] == "Groceries"
+        assert body["category_id"] == str(category.id)
         assert body["notes"] == "Weekly shop"
 
     async def test_updates_multiple_fields_at_once(
@@ -102,25 +107,42 @@ class TestPartialUpdate:
         assert response.status_code == 200
         assert response.json()["notes"] == "revised"
 
+    async def test_updates_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+        category = await add_category(db_session, user)
+        transaction = await add_transaction(db_session, user)
+
+        response = await db_client.patch(
+            url(transaction.id), json={"category_id": str(category.id)}, headers=auth(user)
+        )
+
+        assert response.status_code == 200
+        assert response.json()["category_id"] == str(category.id)
+        assert response.json()["category_name"] == "Groceries"
+
     async def test_explicit_null_clears_a_nullable_field(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         """The distinction this endpoint exists to get right.
 
-        Omitting `category` must leave it alone (see the test above); sending
-        it as null must clear it. If exclude_unset were replaced by
+        Omitting `category_id` must leave it alone (see the test above);
+        sending it as null must clear it. If exclude_unset were replaced by
         exclude_none, this would be indistinguishable from omitting the field
         and would silently stop working.
         """
         user = await register(db_session)
-        transaction = await add_transaction(db_session, user, category="Groceries")
+        category = await add_category(db_session, user)
+        transaction = await add_transaction(db_session, user, category_id=category.id)
 
         response = await db_client.patch(
-            url(transaction.id), json={"category": None}, headers=auth(user)
+            url(transaction.id), json={"category_id": None}, headers=auth(user)
         )
 
         assert response.status_code == 200
-        assert response.json()["category"] is None
+        assert response.json()["category_id"] is None
+        assert response.json()["category_name"] is None
 
     async def test_empty_body_changes_nothing(
         self, db_client: AsyncClient, db_session: AsyncSession
@@ -192,6 +214,36 @@ class TestValidation:
 
         response = await db_client.patch(
             url(transaction.id), json={field: None}, headers=auth(user)
+        )
+
+        assert response.status_code == 422
+
+    async def test_rejects_a_nonexistent_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+        transaction = await add_transaction(db_session, user)
+
+        response = await db_client.patch(
+            url(transaction.id),
+            json={"category_id": str(uuid.uuid4())},
+            headers=auth(user),
+        )
+
+        assert response.status_code == 422
+
+    async def test_rejects_another_users_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        ada = await register(db_session, email="ada@example.com")
+        grace = await register(db_session, email="grace@example.com")
+        graces_category = await add_category(db_session, grace)
+        transaction = await add_transaction(db_session, ada)
+
+        response = await db_client.patch(
+            url(transaction.id),
+            json={"category_id": str(graces_category.id)},
+            headers=auth(ada),
         )
 
         assert response.status_code == 422

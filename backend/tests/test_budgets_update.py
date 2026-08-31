@@ -9,8 +9,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
-from app.models import Budget, User
+from app.models import Budget, Category, User
 from app.services.budget import create_budget, update_budget
+from app.services.category import create_category
 from app.services.user import create_user
 
 PASSWORD = "correct-horse-battery-staple"
@@ -25,11 +26,17 @@ def auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def add_category(session: AsyncSession, user: User, *, name: str = "Groceries") -> Category:
+    return await create_category(session, user_id=user.id, name=name)
+
+
 async def add_budget(
-    session: AsyncSession, user: User, *, category: str = "Groceries", limit_amount: str = "500.00"
+    session: AsyncSession, user: User, *, category_id: uuid.UUID | None = None
 ) -> Budget:
+    if category_id is None:
+        category_id = (await add_category(session, user)).id
     return await create_budget(
-        session, user_id=user.id, category=category, limit_amount=Decimal(limit_amount)
+        session, user_id=user.id, category_id=category_id, limit_amount=Decimal("500.00")
     )
 
 
@@ -53,21 +60,23 @@ class TestPartialUpdate:
         assert response.status_code == 200
         body = response.json()
         assert body["limit_amount"] == "600.00"
-        assert body["category"] == "Groceries"
+        assert body["category_id"] == str(budget.category_id)
 
-    async def test_updates_the_category(
+    async def test_updates_the_category_id(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
         budget = await add_budget(db_session, user)
+        household = await add_category(db_session, user, name="Household")
 
         response = await db_client.patch(
-            url(budget.id), json={"category": "Household"}, headers=auth(user)
+            url(budget.id), json={"category_id": str(household.id)}, headers=auth(user)
         )
 
         assert response.status_code == 200
         body = response.json()
-        assert body["category"] == "Household"
+        assert body["category_id"] == str(household.id)
+        assert body["category_name"] == "Household"
         assert body["limit_amount"] == "500.00"
 
     async def test_updates_both_fields_at_once(
@@ -75,16 +84,17 @@ class TestPartialUpdate:
     ) -> None:
         user = await register(db_session)
         budget = await add_budget(db_session, user)
+        household = await add_category(db_session, user, name="Household")
 
         response = await db_client.patch(
             url(budget.id),
-            json={"category": "Household", "limit_amount": "250.00"},
+            json={"category_id": str(household.id), "limit_amount": "250.00"},
             headers=auth(user),
         )
 
         assert response.status_code == 200
         body = response.json()
-        assert body["category"] == "Household"
+        assert body["category_id"] == str(household.id)
         assert body["limit_amount"] == "250.00"
 
     async def test_empty_body_changes_nothing(
@@ -96,7 +106,7 @@ class TestPartialUpdate:
         response = await db_client.patch(url(budget.id), json={}, headers=auth(user))
 
         assert response.status_code == 200
-        assert response.json()["category"] == "Groceries"
+        assert response.json()["category_id"] == str(budget.category_id)
         assert response.json()["limit_amount"] == "500.00"
 
 
@@ -121,23 +131,51 @@ class TestOwnershipAndNotFound:
         graces_budget = await add_budget(db_session, grace)
 
         response = await db_client.patch(
-            url(graces_budget.id), json={"category": "hijacked"}, headers=auth(ada)
+            url(graces_budget.id), json={"limit_amount": "999.00"}, headers=auth(ada)
         )
 
         assert response.status_code == 404
         await db_session.refresh(graces_budget)
-        assert graces_budget.category == "Groceries"
+        assert graces_budget.limit_amount == Decimal("500.00")
 
 
 @pytest.mark.integration
 class TestValidation:
-    async def test_rejects_an_empty_category(
+    async def test_rejects_a_malformed_category_id(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
         budget = await add_budget(db_session, user)
 
-        response = await db_client.patch(url(budget.id), json={"category": ""}, headers=auth(user))
+        response = await db_client.patch(
+            url(budget.id), json={"category_id": "not-a-uuid"}, headers=auth(user)
+        )
+
+        assert response.status_code == 422
+
+    async def test_rejects_a_nonexistent_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+        budget = await add_budget(db_session, user)
+
+        response = await db_client.patch(
+            url(budget.id), json={"category_id": str(uuid.uuid4())}, headers=auth(user)
+        )
+
+        assert response.status_code == 422
+
+    async def test_rejects_another_users_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        ada = await register(db_session, email="ada@example.com")
+        grace = await register(db_session, email="grace@example.com")
+        budget = await add_budget(db_session, ada)
+        graces_category = await add_category(db_session, grace)
+
+        response = await db_client.patch(
+            url(budget.id), json={"category_id": str(graces_category.id)}, headers=auth(ada)
+        )
 
         assert response.status_code == 422
 
@@ -153,7 +191,7 @@ class TestValidation:
 
         assert response.status_code == 422
 
-    @pytest.mark.parametrize("field", ["category", "limit_amount"])
+    @pytest.mark.parametrize("field", ["category_id", "limit_amount"])
     async def test_rejects_explicit_null(
         self, db_client: AsyncClient, db_session: AsyncSession, field: str
     ) -> None:
@@ -168,41 +206,29 @@ class TestValidation:
 
 @pytest.mark.integration
 class TestDuplicateCategory:
-    async def test_renaming_into_an_existing_category_is_a_conflict(
+    async def test_switching_to_a_category_with_an_existing_budget_is_a_conflict(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await add_budget(db_session, user, category="Dining")
-        groceries = await add_budget(db_session, user, category="Groceries")
+        dining = await add_category(db_session, user, name="Dining")
+        await add_budget(db_session, user, category_id=dining.id)
+        groceries_budget = await add_budget(db_session, user)
 
         response = await db_client.patch(
-            url(groceries.id), json={"category": "Dining"}, headers=auth(user)
+            url(groceries_budget.id), json={"category_id": str(dining.id)}, headers=auth(user)
         )
 
         assert response.status_code == 409
 
-    async def test_renaming_into_an_existing_category_regardless_of_case_is_a_conflict(
+    async def test_switching_to_its_own_current_category_is_not_a_conflict(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
+        """A no-op switch must not collide with the row's own existing value."""
         user = await register(db_session)
-        await add_budget(db_session, user, category="Dining")
-        groceries = await add_budget(db_session, user, category="Groceries")
+        budget = await add_budget(db_session, user)
 
         response = await db_client.patch(
-            url(groceries.id), json={"category": "dining"}, headers=auth(user)
-        )
-
-        assert response.status_code == 409
-
-    async def test_renaming_to_its_own_current_category_is_not_a_conflict(
-        self, db_client: AsyncClient, db_session: AsyncSession
-    ) -> None:
-        """A no-op rename must not collide with the row's own existing value."""
-        user = await register(db_session)
-        budget = await add_budget(db_session, user, category="Groceries")
-
-        response = await db_client.patch(
-            url(budget.id), json={"category": "Groceries"}, headers=auth(user)
+            url(budget.id), json={"category_id": str(budget.category_id)}, headers=auth(user)
         )
 
         assert response.status_code == 200
@@ -216,7 +242,7 @@ class TestAuthentication:
         user = await register(db_session)
         budget = await add_budget(db_session, user)
 
-        response = await db_client.patch(url(budget.id), json={"category": "x"})
+        response = await db_client.patch(url(budget.id), json={"limit_amount": "1.00"})
 
         assert response.status_code == 401
 

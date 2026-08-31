@@ -4,13 +4,17 @@ Run end to end - HTTP request, validation, service, real PostgreSQL - same
 reasoning as test_budgets_create.py.
 """
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
 from app.models import Category, User
+from app.services.category import create_category
 from app.services.user import create_user
 
 CATEGORIES_URL = "/api/v1/categories"
@@ -156,3 +160,21 @@ class TestDuplicateName:
         response = await db_client.post(CATEGORIES_URL, json=payload(), headers=auth(second_user))
 
         assert response.status_code == 201
+
+
+@pytest.mark.integration
+class TestServiceLevelIntegrityErrors:
+    async def test_a_non_unique_integrity_error_is_not_mislabelled(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A FK violation must NOT be reported as a duplicate name.
+
+        Calling the service directly with a nonexistent user_id bypasses
+        the ownership the API layer would normally guarantee. The
+        fk_categories_user_id_users constraint then rejects it - and that
+        must surface as a plain IntegrityError, not get mislabelled as
+        CategoryNameAlreadyExists. Mirrors test_budgets_create.py's
+        identical check on create_budget.
+        """
+        with pytest.raises(IntegrityError):
+            await create_category(db_session, user_id=uuid.uuid4(), name="Groceries")

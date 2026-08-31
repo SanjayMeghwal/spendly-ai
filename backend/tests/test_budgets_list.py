@@ -8,8 +8,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
-from app.models import Transaction, User
+from app.models import Category, Transaction, User
 from app.services.budget import create_budget
+from app.services.category import create_category
 from app.services.user import create_user
 
 BUDGETS_URL = "/api/v1/budgets"
@@ -25,11 +26,15 @@ def auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+async def add_category(session: AsyncSession, user: User, *, name: str) -> Category:
+    return await create_category(session, user_id=user.id, name=name)
+
+
 async def add_budget(
-    session: AsyncSession, user: User, *, category: str, limit_amount: str = "500.00"
+    session: AsyncSession, user: User, *, category_id: object, limit_amount: str = "500.00"
 ) -> None:
     await create_budget(
-        session, user_id=user.id, category=category, limit_amount=Decimal(limit_amount)
+        session, user_id=user.id, category_id=category_id, limit_amount=Decimal(limit_amount)
     )
 
 
@@ -38,7 +43,7 @@ async def add_transaction(
     user: User,
     *,
     amount: str,
-    category: str,
+    category_id: object,
     occurred_at: datetime,
 ) -> None:
     session.add(
@@ -46,7 +51,7 @@ async def add_transaction(
             user_id=user.id,
             amount=Decimal(amount),
             description="test transaction",
-            category=category,
+            category_id=category_id,
             occurred_at=occurred_at,
         )
     )
@@ -61,14 +66,16 @@ class TestSuccessfulListing:
         """Mirrors test_transactions_list.py's cross-user check."""
         ada = await register(db_session, email="ada@example.com")
         grace = await register(db_session, email="grace@example.com")
-        await add_budget(db_session, ada, category="Ada's Groceries")
-        await add_budget(db_session, grace, category="Grace's Groceries")
+        ada_category = await add_category(db_session, ada, name="Ada's Groceries")
+        grace_category = await add_category(db_session, grace, name="Grace's Groceries")
+        await add_budget(db_session, ada, category_id=ada_category.id)
+        await add_budget(db_session, grace, category_id=grace_category.id)
 
         response = await db_client.get(BUDGETS_URL, headers=auth(ada))
 
         assert response.status_code == 200
-        categories = [b["category"] for b in response.json()]
-        assert categories == ["Ada's Groceries"]
+        names = [b["category_name"] for b in response.json()]
+        assert names == ["Ada's Groceries"]
 
     async def test_returns_empty_list_when_the_user_has_none(
         self, db_client: AsyncClient, db_session: AsyncSession
@@ -80,36 +87,43 @@ class TestSuccessfulListing:
         assert response.status_code == 200
         assert response.json() == []
 
-    async def test_orders_alphabetically_by_category(
+    async def test_orders_alphabetically_by_category_name(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await add_budget(db_session, user, category="Utilities")
-        await add_budget(db_session, user, category="Dining")
-        await add_budget(db_session, user, category="Groceries")
+        utilities = await add_category(db_session, user, name="Utilities")
+        dining = await add_category(db_session, user, name="Dining")
+        groceries = await add_category(db_session, user, name="Groceries")
+        await add_budget(db_session, user, category_id=utilities.id)
+        await add_budget(db_session, user, category_id=dining.id)
+        await add_budget(db_session, user, category_id=groceries.id)
 
         response = await db_client.get(BUDGETS_URL, headers=auth(user))
 
-        categories = [b["category"] for b in response.json()]
-        assert categories == ["Dining", "Groceries", "Utilities"]
+        names = [b["category_name"] for b in response.json()]
+        assert names == ["Dining", "Groceries", "Utilities"]
 
     async def test_each_budget_reports_its_own_spend(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await add_budget(db_session, user, category="Groceries")
-        await add_budget(db_session, user, category="Dining")
+        groceries = await add_category(db_session, user, name="Groceries")
+        dining = await add_category(db_session, user, name="Dining")
+        await add_budget(db_session, user, category_id=groceries.id)
+        await add_budget(db_session, user, category_id=dining.id)
         now = datetime.now(UTC)
         await add_transaction(
-            db_session, user, amount="-50.00", category="Groceries", occurred_at=now
+            db_session, user, amount="-50.00", category_id=groceries.id, occurred_at=now
         )
-        await add_transaction(db_session, user, amount="-15.00", category="Dining", occurred_at=now)
+        await add_transaction(
+            db_session, user, amount="-15.00", category_id=dining.id, occurred_at=now
+        )
 
         response = await db_client.get(BUDGETS_URL, headers=auth(user))
 
-        by_category = {b["category"]: b for b in response.json()}
-        assert by_category["Groceries"]["spent"] == "50.00"
-        assert by_category["Dining"]["spent"] == "15.00"
+        by_name = {b["category_name"]: b for b in response.json()}
+        assert by_name["Groceries"]["spent"] == "50.00"
+        assert by_name["Dining"]["spent"] == "15.00"
 
 
 @pytest.mark.integration
@@ -118,12 +132,13 @@ class TestMonthParameter:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await add_budget(db_session, user, category="Groceries")
+        category = await add_category(db_session, user, name="Groceries")
+        await add_budget(db_session, user, category_id=category.id)
         await add_transaction(
             db_session,
             user,
             amount="-50.00",
-            category="Groceries",
+            category_id=category.id,
             occurred_at=datetime.now(UTC),
         )
 
@@ -135,12 +150,13 @@ class TestMonthParameter:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await add_budget(db_session, user, category="Groceries")
+        category = await add_category(db_session, user, name="Groceries")
+        await add_budget(db_session, user, category_id=category.id)
         await add_transaction(
             db_session,
             user,
             amount="-50.00",
-            category="Groceries",
+            category_id=category.id,
             occurred_at=datetime(2026, 3, 15, tzinfo=UTC),
         )
 
@@ -152,12 +168,13 @@ class TestMonthParameter:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await add_budget(db_session, user, category="Groceries")
+        category = await add_category(db_session, user, name="Groceries")
+        await add_budget(db_session, user, category_id=category.id)
         await add_transaction(
             db_session,
             user,
             amount="-50.00",
-            category="Groceries",
+            category_id=category.id,
             occurred_at=datetime(2026, 3, 15, tzinfo=UTC),
         )
 
@@ -172,19 +189,20 @@ class TestMonthParameter:
         rolls into January of the FOLLOWING year, not month 13 of this one.
         """
         user = await register(db_session)
-        await add_budget(db_session, user, category="Groceries")
+        category = await add_category(db_session, user, name="Groceries")
+        await add_budget(db_session, user, category_id=category.id)
         await add_transaction(
             db_session,
             user,
             amount="-50.00",
-            category="Groceries",
+            category_id=category.id,
             occurred_at=datetime(2026, 12, 31, 23, 0, tzinfo=UTC),
         )
         await add_transaction(
             db_session,
             user,
             amount="-999.00",
-            category="Groceries",
+            category_id=category.id,
             occurred_at=datetime(2027, 1, 1, 0, 0, tzinfo=UTC),
         )
 

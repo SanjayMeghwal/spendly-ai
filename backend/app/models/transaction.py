@@ -19,11 +19,12 @@ from app.db.base import Base
 class Transaction(Base):
     """One movement of money belonging to one user.
 
-    NOTE ON WHAT IS DELIBERATELY ABSENT: there is no `relationship()` back to
-    User, for the same reason RefreshToken has none - this project is async
-    SQLAlchemy, where touching an unloaded relationship raises
-    `MissingGreenlet` rather than lazily querying. The service layer filters
-    by `user_id` explicitly instead, which cannot fail at a distance.
+    NOTE ON WHAT IS DELIBERATELY ABSENT: there is no `relationship()` to
+    User or Category, for the same reason RefreshToken has none - this
+    project is async SQLAlchemy, where touching an unloaded relationship
+    raises `MissingGreenlet` rather than lazily querying. The service layer
+    filters by `user_id` explicitly, and joins to Category explicitly when a
+    read needs the category's name - see category_id below.
     """
 
     __tablename__ = "transactions"
@@ -88,15 +89,25 @@ class Transaction(Base):
         doc="What the transaction was, e.g. 'Grocery store'.",
     )
 
-    # Free-text for now, not a foreign key to a categories table. A
-    # user-owned categories resource (rename, delete-with-reassignment,
-    # defaults) is its own feature, sized for a later milestone - adding it
-    # now would mean this column becomes a FK in a follow-up migration
-    # instead of arriving as one from the start of that feature.
-    category: Mapped[str | None] = mapped_column(
-        String(100),
+    # Milestone 5 cut this over from a free-text string to a real FK - see
+    # app/models/category.py. ondelete="RESTRICT" is a database-level
+    # backstop behind the application's own in-use check in
+    # services/category.py's delete_category: a category still referenced
+    # here should never actually reach a DELETE, but if application logic
+    # ever had a bug that tried, the constraint refuses it loudly instead of
+    # silently orphaning this column. Nullable, same as the free-text column
+    # was - an uncategorized transaction stays valid.
+    #
+    # No relationship() to Category, for the same MissingGreenlet reason
+    # user_id has none - see the class docstring. Reads that need the
+    # category's name join explicitly; see services/category.py's
+    # get_category_names.
+    category_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("categories.id", ondelete="RESTRICT"),
         nullable=True,
-        doc="Free-text category, e.g. 'Groceries'. Optional.",
+        index=True,
+        doc="The category this transaction belongs to, if any.",
     )
 
     notes: Mapped[str | None] = mapped_column(

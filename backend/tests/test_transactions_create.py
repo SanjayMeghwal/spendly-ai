@@ -7,6 +7,7 @@ session would not catch the NUMERIC column actually holding the precision it
 claims to.
 """
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -16,7 +17,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
-from app.models import Transaction, User
+from app.models import Category, Transaction, User
+from app.services.category import create_category
 from app.services.user import create_user
 
 TRANSACTIONS_URL = "/api/v1/transactions"
@@ -33,11 +35,14 @@ def auth(user: User) -> dict[str, str]:
     }
 
 
+async def add_category(session: AsyncSession, user: User, *, name: str = "Groceries") -> Category:
+    return await create_category(session, user_id=user.id, name=name)
+
+
 def payload(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "amount": "-12.50",
         "description": "Grocery store",
-        "category": "Groceries",
         "occurred_at": "2026-08-20T10:00:00Z",
         "notes": "Weekly shop",
     }
@@ -51,14 +56,18 @@ class TestSuccessfulCreation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
-        response = await db_client.post(TRANSACTIONS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            TRANSACTIONS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         assert response.status_code == 201
         body = response.json()
         assert body["amount"] == "-12.50"
         assert body["description"] == "Grocery store"
-        assert body["category"] == "Groceries"
+        assert body["category_id"] == str(category.id)
+        assert body["category_name"] == "Groceries"
         assert body["notes"] == "Weekly shop"
         assert body["id"]
         assert body["created_at"]
@@ -69,13 +78,13 @@ class TestSuccessfulCreation:
     ) -> None:
         user = await register(db_session)
         body = payload()
-        del body["category"]
         del body["notes"]
 
         response = await db_client.post(TRANSACTIONS_URL, json=body, headers=auth(user))
 
         assert response.status_code == 201
-        assert response.json()["category"] is None
+        assert response.json()["category_id"] is None
+        assert response.json()["category_name"] is None
         assert response.json()["notes"] is None
 
     async def test_response_never_exposes_user_id(
@@ -188,3 +197,29 @@ class TestValidation:
         ).scalar_one_or_none()
 
         assert found is None
+
+    async def test_rejects_a_nonexistent_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+
+        response = await db_client.post(
+            TRANSACTIONS_URL, json=payload(category_id=str(uuid.uuid4())), headers=auth(user)
+        )
+
+        assert response.status_code == 422
+
+    async def test_rejects_another_users_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        ada = await register(db_session, email="ada@example.com")
+        grace = await register(db_session, email="grace@example.com")
+        graces_category = await add_category(db_session, grace)
+
+        response = await db_client.post(
+            TRANSACTIONS_URL,
+            json=payload(category_id=str(graces_category.id)),
+            headers=auth(ada),
+        )
+
+        assert response.status_code == 422

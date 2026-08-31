@@ -17,7 +17,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Numeric,
-    String,
     Uuid,
     func,
 )
@@ -29,12 +28,12 @@ from app.db.base import Base
 class Budget(Base):
     """A spending limit for one category, belonging to one user.
 
-    NOTE ON WHAT IS DELIBERATELY ABSENT: no `relationship()` back to User or
-    forward to Transaction, for the same reason Transaction has none - this
-    is async SQLAlchemy, where touching an unloaded relationship raises
+    NOTE ON WHAT IS DELIBERATELY ABSENT: no `relationship()` to User or
+    Category, for the same reason Transaction has none - this is async
+    SQLAlchemy, where touching an unloaded relationship raises
     `MissingGreenlet` instead of lazily querying. The service layer filters
     by `user_id` explicitly, and matches transactions to a budget by
-    category string, not a foreign key - see app/services/budget.py.
+    category_id - see app/services/budget.py.
     """
 
     __tablename__ = "budgets"
@@ -44,6 +43,12 @@ class Budget(Base):
         # column doesn't share Transaction.amount's signed convention, so
         # nothing else stops a negative value from reaching the database.
         CheckConstraint("limit_amount > 0", name="limit_amount_positive"),
+        # "One budget per category per user." Simpler than the free-text
+        # version this replaces (see git history for
+        # uq_budgets_user_id_category_lower): category_id already refers to
+        # one canonical Category row, so this needs no func.lower() - name
+        # uniqueness is Category's own job now, not Budget's.
+        Index("uq_budgets_user_id_category_id", "user_id", "category_id", unique=True),
     )
 
     # --- Identity ---------------------------------------------------------
@@ -64,13 +69,24 @@ class Budget(Base):
     )
 
     # --- What it limits -----------------------------------------------------
-    # Not nullable, unlike Transaction.category: a budget with no category
-    # would have nothing to compare against. There is no "overall" budget in
-    # this milestone.
-    category: Mapped[str] = mapped_column(
-        String(100),
+    # Milestone 5 cut this over from a free-text string to a real FK - see
+    # app/models/category.py. Not nullable, unlike Transaction.category_id:
+    # a budget with no category would have nothing to compare against.
+    # There is no "overall" budget in this milestone. ondelete="RESTRICT"
+    # is a database-level backstop behind delete_category's own in-use
+    # check - see Transaction.category_id's identical reasoning.
+    #
+    # index=True is NOT redundant with __table_args__'s composite unique
+    # index below: (user_id, category_id) can't efficiently serve a lookup
+    # by category_id alone, which is exactly what PostgreSQL needs to check
+    # this FK's ondelete="RESTRICT" when a category is deleted - a B-tree
+    # index only helps a query bound on its LEADING column(s).
+    category_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("categories.id", ondelete="RESTRICT"),
         nullable=False,
-        doc="Free-text category this budget limits, e.g. 'Groceries'.",
+        index=True,
+        doc="The category this budget limits.",
     )
 
     # Unlike Transaction.amount, this is not signed - a limit is inherently
@@ -98,21 +114,4 @@ class Budget(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Budget id={self.id} user_id={self.user_id} category={self.category!r}>"
-
-
-# Expression-based index, so it must be declared after the class rather than
-# inside __table_args__: it needs the fully-instrumented Budget.category
-# attribute (to build the lower() expression), which doesn't exist yet while
-# the class body is still executing.
-#
-# Enforces "one budget per category per user", matching case-insensitively -
-# the same rule app/services/budget.py uses to match transactions against a
-# budget. Without this, "Groceries" and "groceries" could both exist as
-# separate budgets that silently split one category's spend between them.
-Index(
-    "uq_budgets_user_id_category_lower",
-    Budget.user_id,
-    func.lower(Budget.category),
-    unique=True,
-)
+        return f"<Budget id={self.id} user_id={self.user_id} category_id={self.category_id}>"

@@ -18,14 +18,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Budget, Transaction
+from app.services.category import CategoryNotFound, get_category
 
 # Sentinel distinguishing "the caller did not mention this field" from "the
 # caller sent it as null", matching services/transaction.py's _UNSET exactly.
-# Unlike Transaction's category and notes, neither of Budget's mutable fields
-# is nullable - BudgetUpdate's reject_explicit_null validator already refuses
-# an explicit null before this module ever sees one - but the same sentinel
-# is still needed to tell "omitted" from "sent", which a plain None default
-# cannot do.
+# Unlike Transaction's category_id and notes, neither of Budget's mutable
+# fields is nullable - BudgetUpdate's reject_explicit_null validator already
+# refuses an explicit null before this module ever sees one - but the same
+# sentinel is still needed to tell "omitted" from "sent", which a plain None
+# default cannot do.
 _UNSET: Any = object()
 
 
@@ -51,23 +52,27 @@ async def create_budget(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
-    category: str,
+    category_id: uuid.UUID,
     limit_amount: Decimal,
 ) -> Budget:
     """Create a budget owned by user_id and return the persisted row.
 
     THE DUPLICATE CHECK IS DELIBERATELY DONE TWICE, exactly as in
     services/user.py's create_user: catching IntegrityError from the
-    database's uq_budgets_user_id_category_lower index is what actually
+    database's uq_budgets_user_id_category_id index is what actually
     guarantees uniqueness under concurrent requests. Nothing here pre-checks
     with a SELECT first, because a courtesy check would still lose the same
     race - the commit's exception handler is the only path that matters.
 
     Raises:
-        BudgetCategoryAlreadyExists: user_id already has a budget for a
-            category matching this one case-insensitively.
+        CategoryNotFound: category_id doesn't belong to user_id.
+        BudgetCategoryAlreadyExists: user_id already has a budget for this
+            category.
     """
-    budget = Budget(user_id=user_id, category=category, limit_amount=limit_amount)
+    if await get_category(session, user_id=user_id, category_id=category_id) is None:
+        raise CategoryNotFound(category_id)
+
+    budget = Budget(user_id=user_id, category_id=category_id, limit_amount=limit_amount)
     session.add(budget)
 
     try:
@@ -84,7 +89,7 @@ async def create_budget(
         # reached - re-raising anything else here would hide a real bug
         # behind a plausible-looking 409.
         if _is_unique_violation(exc):
-            raise BudgetCategoryAlreadyExists(category) from exc
+            raise BudgetCategoryAlreadyExists(category_id) from exc
         raise
 
     # Load created_at / updated_at, which PostgreSQL filled in during the INSERT.
@@ -115,29 +120,32 @@ async def update_budget(
     *,
     user_id: uuid.UUID,
     budget_id: uuid.UUID,
-    category: str | None = _UNSET,
+    category_id: uuid.UUID | None = _UNSET,
     limit_amount: Decimal | None = _UNSET,
 ) -> Budget | None:
     """Apply a partial update and return the updated row, or None if not found.
 
     Callers pass `**payload.model_dump(exclude_unset=True)` from
     BudgetUpdate, so a field absent from the request body never reaches this
-    function and keeps its `_UNSET` default - untouched. Both category and
-    limit_amount back NOT NULL columns, and BudgetUpdate's own validator
+    function and keeps its `_UNSET` default - untouched. Both category_id
+    and limit_amount back NOT NULL columns, and BudgetUpdate's own validator
     already refuses either as null - the asserts below make that guarantee
     visible to mypy, same as update_transaction's.
 
     Raises:
-        BudgetCategoryAlreadyExists: renaming to `category` would collide
-            with another budget of this user's, case-insensitively.
+        CategoryNotFound: category_id was sent and doesn't belong to user_id.
+        BudgetCategoryAlreadyExists: switching to category_id would collide
+            with another budget of this user's.
     """
     budget = await get_budget(session, user_id=user_id, budget_id=budget_id)
     if budget is None:
         return None
 
-    if category is not _UNSET:
-        assert category is not None
-        budget.category = category
+    if category_id is not _UNSET:
+        assert category_id is not None
+        if await get_category(session, user_id=user_id, category_id=category_id) is None:
+            raise CategoryNotFound(category_id)
+        budget.category_id = category_id
     if limit_amount is not _UNSET:
         assert limit_amount is not None
         budget.limit_amount = limit_amount
@@ -147,7 +155,7 @@ async def update_budget(
     except IntegrityError as exc:
         await session.rollback()
         if _is_unique_violation(exc):
-            raise BudgetCategoryAlreadyExists(category) from exc
+            raise BudgetCategoryAlreadyExists(category_id) from exc
         raise
 
     await session.refresh(budget)
@@ -176,16 +184,17 @@ async def delete_budget(
 
 
 async def list_budgets(session: AsyncSession, *, user_id: uuid.UUID) -> list[Budget]:
-    """Return one user's budgets, alphabetically by category.
+    """Return one user's budgets.
 
     No pagination, unlike list_transactions: a user has at most a few dozen
     categories, bounded by how many distinct things they actually spend
     money on - nothing like an ever-growing transaction history - so the
-    concern that justified pagination there doesn't apply here.
+    concern that justified pagination there doesn't apply here. No longer
+    orderable by category name here either, now that category is a
+    category_id - the route sorts by the denormalized category_name it
+    already has to look up for the response anyway.
     """
-    result = await session.execute(
-        select(Budget).where(Budget.user_id == user_id).order_by(Budget.category)
-    )
+    result = await session.execute(select(Budget).where(Budget.user_id == user_id))
     return list(result.scalars().all())
 
 
@@ -209,7 +218,7 @@ async def spent_for_category(
     session: AsyncSession,
     *,
     user_id: uuid.UUID,
-    category: str,
+    category_id: uuid.UUID,
     year: int,
     month: int,
 ) -> Decimal:
@@ -222,9 +231,11 @@ async def spent_for_category(
     negates the sum: a $50 purchase reads as spent=50.00, comparable
     directly to the limit. "Net", not "expenses only": a refund (a positive
     amount, same category) still reduces spent rather than being ignored -
-    a $50 purchase plus a $20 refund nets to spent=30.00. Matching is
-    case-insensitive, matching the uniqueness rule on Budget.category itself
-    - see app/models/budget.py.
+    a $50 purchase plus a $20 refund nets to spent=30.00.
+
+    Matching is a plain category_id equality now, not a case-insensitive
+    string comparison - both sides point at the same canonical Category row,
+    so there is nothing left to normalize.
 
     A month with no matching transactions returns Decimal("0"), not None -
     SUM() over zero rows is NULL in SQL, but "spent nothing" is the correct
@@ -234,7 +245,7 @@ async def spent_for_category(
     result = await session.execute(
         select(func.sum(Transaction.amount)).where(
             Transaction.user_id == user_id,
-            func.lower(Transaction.category) == category.lower(),
+            Transaction.category_id == category_id,
             Transaction.occurred_at >= start,
             Transaction.occurred_at < end,
         )

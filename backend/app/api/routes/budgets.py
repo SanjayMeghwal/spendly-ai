@@ -10,6 +10,7 @@ docstring for the full reasoning.
 
 import uuid
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Query, status
 
@@ -25,6 +26,7 @@ from app.services.budget import (
     spent_for_category,
     update_budget,
 )
+from app.services.category import CategoryNotFound, get_category_names
 
 router = APIRouter(prefix="/budgets", tags=["budgets"])
 
@@ -49,13 +51,21 @@ def _not_found() -> HTTPException:
 def _conflict() -> HTTPException:
     """The single 409 for 'you already have a budget for that category'.
 
-    Shared by create (a brand new category collides) and update (renaming
-    into a category collides), since both raise the same
+    Shared by create (a brand new category collides) and update (switching
+    to a colliding category), since both raise the same
     BudgetCategoryAlreadyExists domain exception.
     """
     return HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail="A budget for this category already exists.",
+    )
+
+
+def _invalid_category() -> HTTPException:
+    """The single 422 for 'category_id isn't one of your categories', matching transactions.py."""
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="category_id does not refer to one of your categories.",
     )
 
 
@@ -68,19 +78,14 @@ def _resolve_month(month: str | None) -> tuple[int, int]:
     return int(year_str), int(month_str)
 
 
-async def _to_read_model(db: DbSession, budget: Budget, *, year: int, month: int) -> BudgetRead:
-    """Attach one month's spend/remaining to a budget row.
-
-    Shared by every handler that returns a BudgetRead, so the "spent isn't a
-    column, compute it live" rule from app/schemas/budget.py's BudgetRead
-    docstring has exactly one implementation.
-    """
-    spent = await spent_for_category(
-        db, user_id=budget.user_id, category=budget.category, year=year, month=month
-    )
+async def _to_read_model(budget: Budget, category_name: str, *, spent: Decimal) -> BudgetRead:
+    """Assemble a BudgetRead from a budget row plus its already-looked-up
+    category name and month's spend - so building a page of results never
+    queries once per row for the name."""
     return BudgetRead(
         id=budget.id,
-        category=budget.category,
+        category_id=budget.category_id,
+        category_name=category_name,
         limit_amount=budget.limit_amount,
         spent=spent,
         remaining=budget.limit_amount - spent,
@@ -96,6 +101,9 @@ async def _to_read_model(db: DbSession, budget: Budget, *, year: int, month: int
     summary="Set a spending limit for a category",
     responses={
         status.HTTP_409_CONFLICT: {"description": "A budget for this category already exists."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "category_id does not refer to one of your categories."
+        },
     },
 )
 async def create(
@@ -107,15 +115,21 @@ async def create(
         budget = await create_budget(
             db,
             user_id=current_user.id,
-            category=payload.category,
+            category_id=payload.category_id,
             limit_amount=payload.limit_amount,
         )
+    except CategoryNotFound:
+        raise _invalid_category() from None
     except BudgetCategoryAlreadyExists:
         raise _conflict() from None
+    names = await get_category_names(db, user_id=current_user.id, category_ids={budget.category_id})
     # A freshly created budget is always reported against the CURRENT month -
     # there is no month to choose yet from the request, unlike GET.
     year, month = _resolve_month(None)
-    return await _to_read_model(db, budget, year=year, month=month)
+    spent = await spent_for_category(
+        db, user_id=current_user.id, category_id=budget.category_id, year=year, month=month
+    )
+    return await _to_read_model(budget, names[budget.category_id], spent=spent)
 
 
 @router.get(
@@ -131,7 +145,27 @@ async def list_mine(
 ) -> list[BudgetRead]:
     year, resolved_month = _resolve_month(month)
     budgets = await list_budgets(db, user_id=current_user.id)
-    return [await _to_read_model(db, budget, year=year, month=resolved_month) for budget in budgets]
+    names = await get_category_names(
+        db, user_id=current_user.id, category_ids={b.category_id for b in budgets}
+    )
+    results = [
+        await _to_read_model(
+            budget,
+            names[budget.category_id],
+            spent=await spent_for_category(
+                db,
+                user_id=current_user.id,
+                category_id=budget.category_id,
+                year=year,
+                month=resolved_month,
+            ),
+        )
+        for budget in budgets
+    ]
+    # list_budgets no longer orders by category name at the database level -
+    # category is a category_id there now - so sorting on the resolved name
+    # happens here, once the name is actually known.
+    return sorted(results, key=lambda r: r.category_name)
 
 
 @router.get(
@@ -150,8 +184,16 @@ async def get_one(
     budget = await get_budget(db, user_id=current_user.id, budget_id=budget_id)
     if budget is None:
         raise _not_found()
+    names = await get_category_names(db, user_id=current_user.id, category_ids={budget.category_id})
     year, resolved_month = _resolve_month(month)
-    return await _to_read_model(db, budget, year=year, month=resolved_month)
+    spent = await spent_for_category(
+        db,
+        user_id=current_user.id,
+        category_id=budget.category_id,
+        year=year,
+        month=resolved_month,
+    )
+    return await _to_read_model(budget, names[budget.category_id], spent=spent)
 
 
 @router.patch(
@@ -162,6 +204,9 @@ async def get_one(
     responses={
         status.HTTP_404_NOT_FOUND: {"description": "No budget with that id."},
         status.HTTP_409_CONFLICT: {"description": "A budget for this category already exists."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "category_id does not refer to one of your categories."
+        },
     },
 )
 async def update(
@@ -183,12 +228,18 @@ async def update(
             budget_id=budget_id,
             **payload.model_dump(exclude_unset=True),
         )
+    except CategoryNotFound:
+        raise _invalid_category() from None
     except BudgetCategoryAlreadyExists:
         raise _conflict() from None
     if budget is None:
         raise _not_found()
+    names = await get_category_names(db, user_id=current_user.id, category_ids={budget.category_id})
     year, month = _resolve_month(None)
-    return await _to_read_model(db, budget, year=year, month=month)
+    spent = await spent_for_category(
+        db, user_id=current_user.id, category_id=budget.category_id, year=year, month=month
+    )
+    return await _to_read_model(budget, names[budget.category_id], spent=spent)
 
 
 @router.delete(

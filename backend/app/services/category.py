@@ -39,6 +39,18 @@ class CategoryNameAlreadyExists(Exception):
     """
 
 
+class CategoryNotFound(Exception):
+    """Raised when a referenced category_id doesn't exist or isn't owned by the caller.
+
+    Shared by services/transaction.py and services/budget.py: creating or
+    updating a transaction/budget with a category_id that doesn't resolve
+    via get_category is a 422, not a 404 - the URL's own resource is fine,
+    it's the request body that names something that isn't there. Defined
+    here, not duplicated in each caller, since both mean exactly the same
+    thing: "this category_id isn't one of yours."
+    """
+
+
 # PostgreSQL SQLSTATE for unique_violation - see services/user.py's
 # _is_unique_violation for why this is matched by code, not by message text.
 _UNIQUE_VIOLATION = "23505"
@@ -109,6 +121,42 @@ async def get_category(
     return result.scalar_one_or_none()
 
 
+async def get_category_names(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    category_ids: set[uuid.UUID],
+) -> dict[uuid.UUID, str]:
+    """Bulk-resolve category ids to names, scoped to their owner.
+
+    Used by Transaction/Budget reads to denormalize `category_name` without
+    an N+1 query per row - one call resolves every distinct category_id on
+    a whole page of transactions, not one lookup per transaction. An id that
+    doesn't resolve (shouldn't happen: category_id's ondelete="RESTRICT"
+    means a category in use can never actually be deleted) is simply absent
+    from the returned dict rather than raising - the caller decides what
+    "missing" means, same as get_category returning None rather than
+    raising.
+
+    An empty `category_ids` returns an empty dict without querying - every
+    caller passes the *ids actually present* on the rows it's building, and
+    a page of entirely uncategorized rows should not need this to touch the
+    database at all.
+    """
+    if not category_ids:
+        return {}
+    result = await session.execute(
+        select(Category.id, Category.name).where(
+            Category.user_id == user_id, Category.id.in_(category_ids)
+        )
+    )
+    # Not dict(result): Result has its own .keys() method (the column
+    # names), so dict()'s mapping-protocol check picks THAT up instead of
+    # treating result as an iterable of (id, name) pairs, and fails trying
+    # to subscript it. The comprehension sidesteps that ambiguity entirely.
+    return {category_id: name for category_id, name in result}  # noqa: C416
+
+
 async def list_categories(session: AsyncSession, *, user_id: uuid.UUID) -> list[Category]:
     """Return one user's categories, alphabetically by name.
 
@@ -155,7 +203,16 @@ async def update_category(
         await session.rollback()
         if _is_unique_violation(exc):
             raise CategoryNameAlreadyExists(name) from exc
-        raise
+        # Unlike create_category's identical branch (reachable via a
+        # foreign-key violation - see test_categories_create.py), this one
+        # has no way to be exercised today: Category carries no CHECK
+        # constraint, and update_category never touches user_id, so a
+        # unique violation is the only IntegrityError this commit can ever
+        # raise. Kept anyway for defensive symmetry with create_category
+        # and in case a future constraint on Category makes it reachable -
+        # re-raising unconditionally, rather than assuming every
+        # IntegrityError is a name collision, is what makes that safe.
+        raise  # pragma: no cover
 
     await session.refresh(category)
     return category

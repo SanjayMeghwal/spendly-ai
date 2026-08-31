@@ -33,11 +33,9 @@ class TransactionCreate(BaseModel):
         examples=["Grocery store"],
     )
 
-    category: str | None = Field(
+    category_id: uuid.UUID | None = Field(
         default=None,
-        max_length=100,
-        description="Free-text category. Optional.",
-        examples=["Groceries"],
+        description="A category this user owns. Optional.",
     )
 
     occurred_at: datetime = Field(description="When the transaction happened, in UTC.")
@@ -59,7 +57,7 @@ class TransactionUpdate(BaseModel):
 
     amount: Decimal | None = Field(default=None, max_digits=12, decimal_places=2)
     description: str | None = Field(default=None, min_length=1, max_length=255)
-    category: str | None = Field(default=None, max_length=100)
+    category_id: uuid.UUID | None = None
     occurred_at: datetime | None = None
     notes: str | None = Field(default=None, max_length=10_000)
 
@@ -88,6 +86,14 @@ class TransactionRead(BaseModel):
     No `user_id` field. The caller already knows it is their own data - every
     route in this feature scopes its query by the authenticated user - so
     echoing the id back would be redundant, not a security boundary.
+
+    `category_name` is NOT a column on the Transaction model - it is looked
+    up from `categories` per request, the same "compute it, don't store it"
+    approach BudgetRead already uses for `spent`/`remaining`. Because it
+    isn't an ORM attribute, routes build this model explicitly rather than
+    via `model_validate(transaction)` alone - see
+    app/api/routes/transactions.py and app/services/category.py's
+    get_category_names.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -95,7 +101,8 @@ class TransactionRead(BaseModel):
     id: uuid.UUID
     amount: Decimal
     description: str
-    category: str | None
+    category_id: uuid.UUID | None
+    category_name: str | None
     notes: str | None
     occurred_at: datetime
     created_at: datetime

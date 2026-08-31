@@ -21,12 +21,24 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Transaction
+from app.services.category import CategoryNotFound, get_category
 
 # Sentinel distinguishing "the caller did not mention this field" from "the
-# caller sent it as null". PATCH needs both: category and notes are nullable
-# columns, so `None` is a meaningful value (clear it), not merely "no
-# change". A plain `None` default could not tell those apart.
+# caller sent it as null". PATCH needs both: category_id and notes are
+# nullable columns, so `None` is a meaningful value (clear it), not merely
+# "no change". A plain `None` default could not tell those apart.
 _UNSET: Any = object()
+
+
+async def _check_category_id(
+    session: AsyncSession, *, user_id: uuid.UUID, category_id: uuid.UUID | None
+) -> None:
+    """Raise CategoryNotFound if category_id doesn't resolve to one of this
+    user's categories. A no-op for None - "no category" is always valid."""
+    if category_id is None:
+        return
+    if await get_category(session, user_id=user_id, category_id=category_id) is None:
+        raise CategoryNotFound(category_id)
 
 
 async def create_transaction(
@@ -36,16 +48,21 @@ async def create_transaction(
     amount: Decimal,
     description: str,
     occurred_at: datetime,
-    category: str | None = None,
+    category_id: uuid.UUID | None = None,
     notes: str | None = None,
 ) -> Transaction:
-    """Create a transaction owned by user_id and return the persisted row."""
+    """Create a transaction owned by user_id and return the persisted row.
+
+    Raises:
+        CategoryNotFound: category_id doesn't belong to user_id.
+    """
+    await _check_category_id(session, user_id=user_id, category_id=category_id)
     transaction = Transaction(
         user_id=user_id,
         amount=amount,
         description=description,
         occurred_at=occurred_at,
-        category=category,
+        category_id=category_id,
         notes=notes,
     )
     session.add(transaction)
@@ -109,7 +126,7 @@ async def update_transaction(
     transaction_id: uuid.UUID,
     amount: Decimal | None = _UNSET,
     description: str | None = _UNSET,
-    category: str | None = _UNSET,
+    category_id: uuid.UUID | None = _UNSET,
     occurred_at: datetime | None = _UNSET,
     notes: str | None = _UNSET,
 ) -> Transaction | None:
@@ -123,6 +140,9 @@ async def update_transaction(
     validator already refuses to accept as null, since they back NOT NULL
     columns. The asserts below are that guarantee, made visible to mypy: a
     Mapped[Decimal] column cannot be assigned `Decimal | None` without one.
+
+    Raises:
+        CategoryNotFound: category_id was sent and doesn't belong to user_id.
     """
     transaction = await get_transaction(session, user_id=user_id, transaction_id=transaction_id)
     if transaction is None:
@@ -134,8 +154,9 @@ async def update_transaction(
     if description is not _UNSET:
         assert description is not None
         transaction.description = description
-    if category is not _UNSET:
-        transaction.category = category
+    if category_id is not _UNSET:
+        await _check_category_id(session, user_id=user_id, category_id=category_id)
+        transaction.category_id = category_id
     if occurred_at is not _UNSET:
         assert occurred_at is not None
         transaction.occurred_at = occurred_at

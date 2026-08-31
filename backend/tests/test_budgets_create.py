@@ -6,6 +6,7 @@ those layers, including the spend calculation, which needs real transaction
 rows and a real database SUM().
 """
 
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -16,8 +17,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
-from app.models import Budget, Transaction, User
+from app.models import Budget, Category, Transaction, User
 from app.services.budget import create_budget
+from app.services.category import create_category
 from app.services.user import create_user
 
 BUDGETS_URL = "/api/v1/budgets"
@@ -34,8 +36,12 @@ def auth(user: User) -> dict[str, str]:
     }
 
 
+async def add_category(session: AsyncSession, user: User, *, name: str = "Groceries") -> Category:
+    return await create_category(session, user_id=user.id, name=name)
+
+
 def payload(**overrides: object) -> dict[str, object]:
-    body: dict[str, object] = {"category": "Groceries", "limit_amount": "500.00"}
+    body: dict[str, object] = {"limit_amount": "500.00"}
     body.update(overrides)
     return body
 
@@ -45,7 +51,7 @@ async def add_transaction(
     *,
     user_id: object,
     amount: Decimal,
-    category: str,
+    category_id: object,
     occurred_at: datetime,
 ) -> None:
     session.add(
@@ -53,7 +59,7 @@ async def add_transaction(
             user_id=user_id,
             amount=amount,
             description="test transaction",
-            category=category,
+            category_id=category_id,
             occurred_at=occurred_at,
         )
     )
@@ -66,12 +72,16 @@ class TestSuccessfulCreation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         assert response.status_code == 201
         body = response.json()
-        assert body["category"] == "Groceries"
+        assert body["category_id"] == str(category.id)
+        assert body["category_name"] == "Groceries"
         assert body["limit_amount"] == "500.00"
         assert body["id"]
         assert body["created_at"]
@@ -81,8 +91,11 @@ class TestSuccessfulCreation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         body = response.json()
         assert body["spent"] == "0"
@@ -92,61 +105,69 @@ class TestSuccessfulCreation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
         now = datetime.now(UTC)
         await add_transaction(
             db_session,
             user_id=user.id,
             amount=Decimal("-50.00"),
-            category="Groceries",
+            category_id=category.id,
             occurred_at=now,
         )
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         body = response.json()
         assert body["spent"] == "50.00"
         assert body["remaining"] == "450.00"
 
-    async def test_category_matching_is_case_insensitive(
+    async def test_only_transactions_in_the_same_category_count(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        groceries = await add_category(db_session, user, name="Groceries")
+        dining = await add_category(db_session, user, name="Dining")
         now = datetime.now(UTC)
         await add_transaction(
             db_session,
             user_id=user.id,
             amount=Decimal("-50.00"),
-            category="groceries",
+            category_id=dining.id,
             occurred_at=now,
         )
 
         response = await db_client.post(
-            BUDGETS_URL, json=payload(category="Groceries"), headers=auth(user)
+            BUDGETS_URL, json=payload(category_id=str(groceries.id)), headers=auth(user)
         )
 
-        assert response.json()["spent"] == "50.00"
+        assert response.json()["spent"] == "0"
 
     async def test_a_refund_offsets_spend(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
         now = datetime.now(UTC)
         await add_transaction(
             db_session,
             user_id=user.id,
             amount=Decimal("-50.00"),
-            category="Groceries",
+            category_id=category.id,
             occurred_at=now,
         )
         await add_transaction(
             db_session,
             user_id=user.id,
             amount=Decimal("20.00"),
-            category="Groceries",
+            category_id=category.id,
             occurred_at=now,
         )
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         assert response.json()["spent"] == "30.00"
 
@@ -154,15 +175,18 @@ class TestSuccessfulCreation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
         await add_transaction(
             db_session,
             user_id=user.id,
             amount=Decimal("-50.00"),
-            category="Groceries",
+            category_id=category.id,
             occurred_at=datetime(2020, 1, 15, tzinfo=UTC),
         )
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         assert response.json()["spent"] == "0"
 
@@ -176,8 +200,11 @@ class TestSuccessfulCreation:
         accident.
         """
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         assert "user_id" not in response.json()
 
@@ -185,8 +212,11 @@ class TestSuccessfulCreation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         stored = (
             await db_session.execute(select(Budget).where(Budget.id == response.json()["id"]))
@@ -198,30 +228,54 @@ class TestSuccessfulCreation:
 @pytest.mark.integration
 class TestAuthentication:
     async def test_requires_authentication(self, db_client: AsyncClient) -> None:
-        response = await db_client.post(BUDGETS_URL, json=payload())
+        response = await db_client.post(BUDGETS_URL, json=payload(category_id=str(uuid.uuid4())))
 
         assert response.status_code == 401
 
 
 @pytest.mark.integration
 class TestValidation:
-    async def test_rejects_a_missing_category(
+    async def test_rejects_a_missing_category_id(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        body = payload()
-        del body["category"]
 
-        response = await db_client.post(BUDGETS_URL, json=body, headers=auth(user))
+        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
 
         assert response.status_code == 422
 
-    async def test_rejects_an_empty_category(
+    async def test_rejects_a_malformed_category_id(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
 
-        response = await db_client.post(BUDGETS_URL, json=payload(category=""), headers=auth(user))
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id="not-a-uuid"), headers=auth(user)
+        )
+
+        assert response.status_code == 422
+
+    async def test_rejects_a_nonexistent_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(uuid.uuid4())), headers=auth(user)
+        )
+
+        assert response.status_code == 422
+
+    async def test_rejects_another_users_category_id(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        ada = await register(db_session, email="ada@example.com")
+        grace = await register(db_session, email="grace@example.com")
+        graces_category = await add_category(db_session, grace)
+
+        response = await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(graces_category.id)), headers=auth(ada)
+        )
 
         assert response.status_code == 422
 
@@ -229,9 +283,12 @@ class TestValidation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
         response = await db_client.post(
-            BUDGETS_URL, json=payload(limit_amount="0.00"), headers=auth(user)
+            BUDGETS_URL,
+            json=payload(category_id=str(category.id), limit_amount="0.00"),
+            headers=auth(user),
         )
 
         assert response.status_code == 422
@@ -240,9 +297,12 @@ class TestValidation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
         response = await db_client.post(
-            BUDGETS_URL, json=payload(limit_amount="-10.00"), headers=auth(user)
+            BUDGETS_URL,
+            json=payload(category_id=str(category.id), limit_amount="-10.00"),
+            headers=auth(user),
         )
 
         assert response.status_code == 422
@@ -251,9 +311,12 @@ class TestValidation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
         response = await db_client.post(
-            BUDGETS_URL, json=payload(limit_amount="123456789012.00"), headers=auth(user)
+            BUDGETS_URL,
+            json=payload(category_id=str(category.id), limit_amount="123456789012.00"),
+            headers=auth(user),
         )
 
         assert response.status_code == 422
@@ -262,8 +325,13 @@ class TestValidation:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
-        await db_client.post(BUDGETS_URL, json=payload(category=""), headers=auth(user))
+        await db_client.post(
+            BUDGETS_URL,
+            json=payload(category_id=str(category.id), limit_amount="0.00"),
+            headers=auth(user),
+        )
 
         found = (
             await db_session.execute(select(Budget).where(Budget.user_id == user.id))
@@ -278,20 +346,13 @@ class TestDuplicateCategory:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
-
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(user))
-
-        assert response.status_code == 409
-
-    async def test_rejects_a_duplicate_category_regardless_of_case(
-        self, db_client: AsyncClient, db_session: AsyncSession
-    ) -> None:
-        user = await register(db_session)
-        await db_client.post(BUDGETS_URL, json=payload(category="Groceries"), headers=auth(user))
+        category = await add_category(db_session, user)
+        await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
+        )
 
         response = await db_client.post(
-            BUDGETS_URL, json=payload(category="groceries"), headers=auth(user)
+            BUDGETS_URL, json=payload(category_id=str(category.id)), headers=auth(user)
         )
 
         assert response.status_code == 409
@@ -301,9 +362,17 @@ class TestDuplicateCategory:
     ) -> None:
         first_user = await register(db_session, email="first@example.com")
         second_user = await register(db_session, email="second@example.com")
-        await db_client.post(BUDGETS_URL, json=payload(), headers=auth(first_user))
+        first_category = await add_category(db_session, first_user)
+        second_category = await add_category(db_session, second_user)
+        await db_client.post(
+            BUDGETS_URL, json=payload(category_id=str(first_category.id)), headers=auth(first_user)
+        )
 
-        response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(second_user))
+        response = await db_client.post(
+            BUDGETS_URL,
+            json=payload(category_id=str(second_category.id)),
+            headers=auth(second_user),
+        )
 
         assert response.status_code == 201
 
@@ -326,11 +395,12 @@ class TestServiceLevelIntegrityErrors:
         test for the wrong reason.
         """
         user = await register(db_session)
+        category = await add_category(db_session, user)
 
         with pytest.raises(IntegrityError):
             await create_budget(
                 db_session,
                 user_id=user.id,
-                category="Groceries",
+                category_id=category.id,
                 limit_amount=Decimal("-10.00"),
             )

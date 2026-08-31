@@ -17,7 +17,9 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession
+from app.models import Transaction
 from app.schemas.transaction import TransactionCreate, TransactionRead, TransactionUpdate
+from app.services.category import CategoryNotFound, get_category_names
 from app.services.transaction import (
     create_transaction,
     delete_transaction,
@@ -42,27 +44,76 @@ def _not_found() -> HTTPException:
     )
 
 
+def _invalid_category() -> HTTPException:
+    """The single 422 for 'category_id isn't one of your categories'.
+
+    422, not 404: the URL's own resource (the transaction, or nothing yet
+    on create) is fine - it's the request BODY that names a related entity
+    that doesn't exist, which is a validation failure, not a routing one.
+    """
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        detail="category_id does not refer to one of your categories.",
+    )
+
+
+def _to_read_model(
+    transaction: Transaction, category_names: dict[uuid.UUID, str]
+) -> TransactionRead:
+    """Attach the denormalized category name to a transaction row.
+
+    `category_names` is a bulk lookup the caller already did - see
+    app/services/category.py's get_category_names - so building a page of
+    results never queries once per row.
+    """
+    return TransactionRead(
+        id=transaction.id,
+        amount=transaction.amount,
+        description=transaction.description,
+        category_id=transaction.category_id,
+        category_name=category_names.get(transaction.category_id)
+        if transaction.category_id
+        else None,
+        notes=transaction.notes,
+        occurred_at=transaction.occurred_at,
+        created_at=transaction.created_at,
+        updated_at=transaction.updated_at,
+    )
+
+
 @router.post(
     "",
     status_code=status.HTTP_201_CREATED,
     response_model=TransactionRead,
     summary="Record a transaction",
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "category_id does not refer to one of your categories."
+        },
+    },
 )
 async def create(
     payload: TransactionCreate,
     current_user: CurrentUser,
     db: DbSession,
 ) -> TransactionRead:
-    transaction = await create_transaction(
-        db,
-        user_id=current_user.id,
-        amount=payload.amount,
-        description=payload.description,
-        category=payload.category,
-        occurred_at=payload.occurred_at,
-        notes=payload.notes,
+    try:
+        transaction = await create_transaction(
+            db,
+            user_id=current_user.id,
+            amount=payload.amount,
+            description=payload.description,
+            category_id=payload.category_id,
+            occurred_at=payload.occurred_at,
+            notes=payload.notes,
+        )
+    except CategoryNotFound:
+        raise _invalid_category() from None
+    category_ids = {transaction.category_id} if transaction.category_id else set()
+    category_names = await get_category_names(
+        db, user_id=current_user.id, category_ids=category_ids
     )
-    return TransactionRead.model_validate(transaction)
+    return _to_read_model(transaction, category_names)
 
 
 @router.get(
@@ -81,7 +132,11 @@ async def list_mine(
     offset: int = Query(default=0, ge=0),
 ) -> list[TransactionRead]:
     transactions = await list_transactions(db, user_id=current_user.id, limit=limit, offset=offset)
-    return [TransactionRead.model_validate(t) for t in transactions]
+    category_ids = {t.category_id for t in transactions if t.category_id is not None}
+    category_names = await get_category_names(
+        db, user_id=current_user.id, category_ids=category_ids
+    )
+    return [_to_read_model(t, category_names) for t in transactions]
 
 
 @router.get(
@@ -99,7 +154,11 @@ async def get_one(
     transaction = await get_transaction(db, user_id=current_user.id, transaction_id=transaction_id)
     if transaction is None:
         raise _not_found()
-    return TransactionRead.model_validate(transaction)
+    category_ids = {transaction.category_id} if transaction.category_id else set()
+    category_names = await get_category_names(
+        db, user_id=current_user.id, category_ids=category_ids
+    )
+    return _to_read_model(transaction, category_names)
 
 
 @router.patch(
@@ -107,7 +166,12 @@ async def get_one(
     status_code=status.HTTP_200_OK,
     response_model=TransactionRead,
     summary="Update one of the authenticated user's transactions",
-    responses={status.HTTP_404_NOT_FOUND: {"description": "No transaction with that id."}},
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "No transaction with that id."},
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "category_id does not refer to one of your categories."
+        },
+    },
 )
 async def update(
     transaction_id: uuid.UUID,
@@ -116,19 +180,26 @@ async def update(
     db: DbSession,
 ) -> TransactionRead:
     # exclude_unset, not exclude_none: a field the client omitted must be left
-    # alone, while a field sent explicitly as null (category, notes) must
+    # alone, while a field sent explicitly as null (category_id, notes) must
     # clear it. Only exclude_unset tells those two apart - see
     # services/transaction.py's _UNSET sentinel, which is what actually reads
     # this distinction.
-    transaction = await update_transaction(
-        db,
-        user_id=current_user.id,
-        transaction_id=transaction_id,
-        **payload.model_dump(exclude_unset=True),
-    )
+    try:
+        transaction = await update_transaction(
+            db,
+            user_id=current_user.id,
+            transaction_id=transaction_id,
+            **payload.model_dump(exclude_unset=True),
+        )
+    except CategoryNotFound:
+        raise _invalid_category() from None
     if transaction is None:
         raise _not_found()
-    return TransactionRead.model_validate(transaction)
+    category_ids = {transaction.category_id} if transaction.category_id else set()
+    category_names = await get_category_names(
+        db, user_id=current_user.id, category_ids=category_ids
+    )
+    return _to_read_model(transaction, category_names)
 
 
 @router.delete(

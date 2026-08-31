@@ -9,8 +9,9 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
-from app.models import Budget, Transaction, User
+from app.models import Budget, Category, Transaction, User
 from app.services.budget import create_budget
+from app.services.category import create_category
 from app.services.user import create_user
 
 PASSWORD = "correct-horse-battery-staple"
@@ -25,9 +26,17 @@ def auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-async def add_budget(session: AsyncSession, user: User, *, category: str = "Groceries") -> Budget:
+async def add_category(session: AsyncSession, user: User, *, name: str = "Groceries") -> Category:
+    return await create_category(session, user_id=user.id, name=name)
+
+
+async def add_budget(
+    session: AsyncSession, user: User, *, category_id: uuid.UUID | None = None
+) -> Budget:
+    if category_id is None:
+        category_id = (await add_category(session, user)).id
     return await create_budget(
-        session, user_id=user.id, category=category, limit_amount=Decimal("500.00")
+        session, user_id=user.id, category_id=category_id, limit_amount=Decimal("500.00")
     )
 
 
@@ -48,7 +57,7 @@ class TestSuccessfulRetrieval:
         assert response.status_code == 200
         body = response.json()
         assert body["id"] == str(budget.id)
-        assert body["category"] == "Groceries"
+        assert body["category_name"] == "Groceries"
 
     async def test_reports_spend_for_the_requested_month(
         self, db_client: AsyncClient, db_session: AsyncSession
@@ -60,7 +69,7 @@ class TestSuccessfulRetrieval:
                 user_id=user.id,
                 amount=Decimal("-50.00"),
                 description="test transaction",
-                category="Groceries",
+                category_id=budget.category_id,
                 occurred_at=datetime(2026, 3, 15, tzinfo=UTC),
             )
         )

@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Transaction, User
+from app.models import Category, Transaction, User
 
 
 def make_user(email: str = "sanjay@example.com") -> User:
@@ -53,7 +53,7 @@ class TestPersistence:
 
         assert found.user_id == user.id
         assert found.amount == Decimal("-12.50")
-        assert found.category is None
+        assert found.category_id is None
         assert found.notes is None
 
     async def test_database_supplies_the_defaults(self, db_session: AsyncSession) -> None:
@@ -146,6 +146,58 @@ class TestForeignKey:
         ).scalar_one_or_none()
 
         assert remaining is None
+
+    async def test_transaction_requires_an_existing_category(
+        self, db_session: AsyncSession
+    ) -> None:
+        user = make_user()
+        db_session.add(user)
+        await db_session.flush()
+
+        db_session.add(make_transaction(user.id, category_id=uuid.uuid4()))
+
+        with pytest.raises(IntegrityError) as exc:
+            await db_session.commit()
+
+        assert "fk_transactions_category_id_categories" in str(exc.value)
+
+    async def test_category_id_round_trips(self, db_session: AsyncSession) -> None:
+        user = make_user()
+        db_session.add(user)
+        await db_session.flush()
+        category = Category(user_id=user.id, name="Groceries")
+        db_session.add(category)
+        await db_session.flush()
+
+        transaction = make_transaction(user.id, category_id=category.id)
+        db_session.add(transaction)
+        await db_session.commit()
+        await db_session.refresh(transaction)
+
+        assert transaction.category_id == category.id
+
+    async def test_deleting_a_category_still_in_use_is_rejected(
+        self, db_session: AsyncSession
+    ) -> None:
+        """ondelete="RESTRICT", verified against the real database.
+
+        This is the database-level backstop behind delete_category's own
+        in-use check - see app/models/transaction.py's category_id.
+        """
+        user = make_user()
+        db_session.add(user)
+        await db_session.flush()
+        category = Category(user_id=user.id, name="Groceries")
+        db_session.add(category)
+        await db_session.flush()
+        db_session.add(make_transaction(user.id, category_id=category.id))
+        await db_session.commit()
+
+        await db_session.delete(category)
+        with pytest.raises(IntegrityError) as exc:
+            await db_session.commit()
+
+        assert "fk_transactions_category_id_categories" in str(exc.value)
 
 
 class TestRepr:
