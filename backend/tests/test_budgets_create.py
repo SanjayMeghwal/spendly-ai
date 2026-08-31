@@ -12,10 +12,12 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
 from app.models import Budget, Transaction, User
+from app.services.budget import create_budget
 from app.services.user import create_user
 
 BUDGETS_URL = "/api/v1/budgets"
@@ -304,3 +306,31 @@ class TestDuplicateCategory:
         response = await db_client.post(BUDGETS_URL, json=payload(), headers=auth(second_user))
 
         assert response.status_code == 201
+
+
+@pytest.mark.integration
+class TestServiceLevelIntegrityErrors:
+    async def test_a_non_unique_integrity_error_is_not_mislabelled(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A CHECK violation must NOT be reported as a duplicate category.
+
+        Calling the service directly with a non-positive limit_amount
+        bypasses BudgetCreate's `gt=0` validation, exactly as a careless
+        caller would. The `limit_amount > 0` CHECK constraint then rejects
+        it - and that must surface as a plain IntegrityError, not get
+        mislabelled as BudgetCategoryAlreadyExists. Mirrors
+        test_register.py's identical check on create_user, added there
+        after a mutation test found the same class of bug: relabelling
+        every IntegrityError as "duplicate" passes the duplicate-detection
+        test for the wrong reason.
+        """
+        user = await register(db_session)
+
+        with pytest.raises(IntegrityError):
+            await create_budget(
+                db_session,
+                user_id=user.id,
+                category="Groceries",
+                limit_amount=Decimal("-10.00"),
+            )

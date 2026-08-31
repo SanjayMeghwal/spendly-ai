@@ -165,6 +165,33 @@ class TestMonthParameter:
 
         assert response.json()[0]["spent"] == "0"
 
+    async def test_handles_december_correctly_without_wrapping_into_the_same_year(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """The one calendar boundary _month_bounds has to get right: month=12
+        rolls into January of the FOLLOWING year, not month 13 of this one.
+        """
+        user = await register(db_session)
+        await add_budget(db_session, user, category="Groceries")
+        await add_transaction(
+            db_session,
+            user,
+            amount="-50.00",
+            category="Groceries",
+            occurred_at=datetime(2026, 12, 31, 23, 0, tzinfo=UTC),
+        )
+        await add_transaction(
+            db_session,
+            user,
+            amount="-999.00",
+            category="Groceries",
+            occurred_at=datetime(2027, 1, 1, 0, 0, tzinfo=UTC),
+        )
+
+        response = await db_client.get(BUDGETS_URL, params={"month": "2026-12"}, headers=auth(user))
+
+        assert response.json()[0]["spent"] == "50.00"
+
     async def test_rejects_a_malformed_month(
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:

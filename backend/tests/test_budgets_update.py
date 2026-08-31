@@ -5,11 +5,12 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
 from app.models import Budget, User
-from app.services.budget import create_budget
+from app.services.budget import create_budget, update_budget
 from app.services.user import create_user
 
 PASSWORD = "correct-horse-battery-staple"
@@ -218,3 +219,27 @@ class TestAuthentication:
         response = await db_client.patch(url(budget.id), json={"category": "x"})
 
         assert response.status_code == 401
+
+
+@pytest.mark.integration
+class TestServiceLevelIntegrityErrors:
+    async def test_a_non_unique_integrity_error_is_not_mislabelled(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Mirrors test_budgets_create.py's identical check on create_budget.
+
+        Calling the service directly with a non-positive limit_amount
+        bypasses BudgetUpdate's `gt=0` validation. The CHECK constraint must
+        surface as a plain IntegrityError, not get relabelled as
+        BudgetCategoryAlreadyExists.
+        """
+        user = await register(db_session)
+        budget = await add_budget(db_session, user)
+
+        with pytest.raises(IntegrityError):
+            await update_budget(
+                db_session,
+                user_id=user.id,
+                budget_id=budget.id,
+                limit_amount=Decimal("-10.00"),
+            )
