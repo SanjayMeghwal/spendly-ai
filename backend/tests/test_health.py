@@ -123,6 +123,7 @@ class TestApiSurface:
             "/api/v1/auth/logout-all",
             "/api/v1/auth/me",
             "/api/v1/transactions",
+            "/api/v1/transactions/import",
             "/api/v1/transactions/{transaction_id}",
             "/api/v1/budgets",
             "/api/v1/budgets/{budget_id}",

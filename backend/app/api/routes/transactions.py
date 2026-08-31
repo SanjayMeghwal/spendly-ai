@@ -12,13 +12,18 @@ request; scoping every service call by `current_user.id` instead means there
 is no id to confuse and no ownership check to forget.
 """
 
+import csv
+import io
 import uuid
+from datetime import UTC, date, datetime
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, UploadFile, status
+from pydantic import ValidationError
 
 from app.api.deps import CurrentUser, DbSession
 from app.models import Transaction
 from app.schemas.transaction import TransactionCreate, TransactionRead, TransactionUpdate
+from app.schemas.transaction_import import TransactionImportError, TransactionImportResult
 from app.services.category import CategoryNotFound, get_category_names
 from app.services.transaction import (
     create_transaction,
@@ -27,6 +32,7 @@ from app.services.transaction import (
     list_transactions,
     update_transaction,
 )
+from app.services.transaction_import import ImportRow, import_transactions
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 
@@ -114,6 +120,140 @@ async def create(
         db, user_id=current_user.id, category_ids=category_ids
     )
     return _to_read_model(transaction, category_names)
+
+
+_REQUIRED_CSV_COLUMNS = {"date", "amount", "description"}
+_MAX_CSV_ROWS = 2000
+
+
+class _CsvStructureError(Exception):
+    """A problem with the whole file - bad encoding, missing required
+    header columns, or too many rows - rather than one bad row.
+
+    Raised before any row is processed and answered with a single 422 for
+    the whole request, unlike a per-row problem, which becomes a
+    TransactionImportError entry inside an otherwise-200 response.
+    """
+
+
+def _parse_csv_date(value: str | None) -> datetime:
+    if not value or not value.strip():
+        raise ValueError("date is required")
+    try:
+        parsed = date.fromisoformat(value.strip())
+    except ValueError as exc:
+        raise ValueError("date must be YYYY-MM-DD") from exc
+    # Midnight UTC: a CSV row has no time-of-day to offer, and occurred_at is
+    # always stored TIMESTAMPTZ/UTC - see app/models/transaction.py.
+    return datetime(parsed.year, parsed.month, parsed.day, tzinfo=UTC)
+
+
+def _validation_error_reason(exc: ValidationError) -> str:
+    return "; ".join(f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}" for e in exc.errors())
+
+
+def _parse_csv_row(raw_row: dict[str, str | None]) -> ImportRow:
+    """Parse and validate one CSV row.
+
+    amount/description are validated through TransactionCreate itself -
+    same max_digits/decimal_places/length bounds a normal POST enforces,
+    reused rather than duplicated by hand so the two paths can never
+    silently drift apart. occurred_at is parsed separately first, since it
+    needs its own YYYY-MM-DD-only rule that TransactionCreate's plain
+    `datetime` field doesn't express.
+
+    Raises:
+        ValueError: the row fails validation; the message becomes the
+            TransactionImportError's reason.
+    """
+    occurred_at = _parse_csv_date(raw_row.get("date"))
+    try:
+        validated = TransactionCreate(
+            amount=raw_row.get("amount") or "",
+            description=(raw_row.get("description") or "").strip(),
+            occurred_at=occurred_at,
+            category_id=None,
+        )
+    except ValidationError as exc:
+        raise ValueError(_validation_error_reason(exc)) from exc
+
+    category_name = (raw_row.get("category") or "").strip() or None
+    return ImportRow(
+        occurred_at=validated.occurred_at,
+        amount=validated.amount,
+        description=validated.description,
+        category_name=category_name,
+    )
+
+
+def _parse_csv(raw: bytes) -> tuple[list[ImportRow], list[TransactionImportError]]:
+    """Turn uploaded CSV bytes into validated rows plus per-row errors.
+
+    utf-8-sig, not utf-8: tolerates the byte-order-mark Excel prepends when
+    it saves a CSV, which plain utf-8 decoding would otherwise leave as a
+    stray character glued to the first header name.
+
+    Raises:
+        _CsvStructureError: the file itself is malformed (bad encoding,
+            missing required columns, too many rows) - a whole-request
+            problem, not a per-row one.
+    """
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise _CsvStructureError("File is not valid UTF-8 text.") from exc
+
+    reader = csv.DictReader(io.StringIO(text))
+    missing = _REQUIRED_CSV_COLUMNS - set(reader.fieldnames or [])
+    if missing:
+        raise _CsvStructureError(f"Missing required column(s): {', '.join(sorted(missing))}.")
+
+    raw_rows = list(reader)
+    if len(raw_rows) > _MAX_CSV_ROWS:
+        raise _CsvStructureError(f"File has {len(raw_rows)} rows; the limit is {_MAX_CSV_ROWS}.")
+
+    rows: list[ImportRow] = []
+    errors: list[TransactionImportError] = []
+    for line_number, raw_row in enumerate(raw_rows, start=1):
+        try:
+            rows.append(_parse_csv_row(raw_row))
+        except ValueError as exc:
+            errors.append(TransactionImportError(row=line_number, reason=str(exc)))
+    return rows, errors
+
+
+@router.post(
+    "/import",
+    status_code=status.HTTP_200_OK,
+    response_model=TransactionImportResult,
+    summary="Bulk-create transactions from an uploaded CSV",
+    responses={
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The file itself is malformed - bad encoding, "
+            "missing required columns, or too many rows."
+        },
+    },
+)
+async def import_csv(
+    current_user: CurrentUser,
+    db: DbSession,
+    file: UploadFile,
+) -> TransactionImportResult:
+    raw = await file.read()
+    try:
+        rows, errors = _parse_csv(raw)
+    except _CsvStructureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from None
+
+    outcome = await import_transactions(db, user_id=current_user.id, rows=rows)
+
+    return TransactionImportResult(
+        imported=outcome.imported,
+        skipped_duplicates=outcome.skipped_duplicates,
+        errors=errors,
+    )
 
 
 @router.get(
