@@ -70,13 +70,19 @@ def _invalid_reassign_target() -> HTTPException:
 def _in_use(exc: CategoryInUse) -> HTTPException:
     """409 for 'this category is still in use', with a message that says why.
 
-    A budget always blocks (see CategoryInUse's docstring); transactions
-    block only when the caller didn't supply a usable reassign_to.
+    A budget or goal always blocks (see CategoryInUse's docstring), and a
+    category could in principle have both at once; transactions block only
+    when the caller didn't supply a usable reassign_to.
     """
-    if exc.has_budget:
+    if exc.has_budget or exc.has_goal:
+        blockers = [
+            name
+            for name, present in (("budget", exc.has_budget), ("goal", exc.has_goal))
+            if present
+        ]
         detail = (
-            "A budget targets this category. Delete or update that budget "
-            "before deleting the category."
+            f"This category has a {' and a '.join(blockers)} targeting it. "
+            "Delete or update it before deleting the category."
         )
     else:
         detail = (

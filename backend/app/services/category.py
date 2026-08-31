@@ -14,7 +14,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Budget, Category, Transaction
+from app.models import Budget, Category, Goal, Transaction
 
 # Sentinel distinguishing "the caller did not mention this field" from "the
 # caller sent it as null", matching services/budget.py's _UNSET exactly.
@@ -49,20 +49,26 @@ class CategoryNotFound(Exception):
 class CategoryInUse(Exception):
     """Raised when delete_category is blocked by something still referencing it.
 
-    Two distinct reasons, both surfaced as 409 by the route with a
+    Three distinct reasons, all surfaced as 409 by the route with a
     different message:
-      - `has_budget`: a budget targets this category. This ALWAYS blocks,
-        regardless of `reassign_to` - merging two budgets' limits isn't
-        something to do automatically; the caller deletes or repoints the
-        budget first via the existing budgets API.
+      - `has_budget`: a budget targets this category.
+      - `has_goal`: a goal targets this category.
       - `transaction_count`: this many transactions reference the category
         and no usable `reassign_to` was given.
+
+    `has_budget` and `has_goal` ALWAYS block, regardless of `reassign_to` -
+    merging two budgets' limits, or two goals' progress, isn't something to
+    do automatically; the caller deletes or repoints the budget/goal first
+    via its own API, same reasoning for both.
     """
 
-    def __init__(self, *, has_budget: bool, transaction_count: int) -> None:
+    def __init__(self, *, has_budget: bool, has_goal: bool, transaction_count: int) -> None:
         self.has_budget = has_budget
+        self.has_goal = has_goal
         self.transaction_count = transaction_count
-        super().__init__(f"has_budget={has_budget} transaction_count={transaction_count}")
+        super().__init__(
+            f"has_budget={has_budget} has_goal={has_goal} transaction_count={transaction_count}"
+        )
 
 
 # PostgreSQL SQLSTATE for unique_violation - see services/user.py's
@@ -244,19 +250,20 @@ async def delete_category(
     Returns whether a row was actually deleted - False means "not found or
     not yours", same as delete_budget/delete_transaction.
 
-    A category with an active BUDGET always blocks deletion, regardless of
-    `reassign_to` - see CategoryInUse. A category with TRANSACTIONS blocks
-    deletion only if no `reassign_to` is given; with one, every matching
-    transaction is moved to it in the same transaction as the delete, so
-    the two can never observably happen apart. `reassign_to` equal to
-    `category_id` itself is treated as if it were not given at all -
-    reassigning something to itself is a no-op, not an error.
+    A category with an active BUDGET or GOAL always blocks deletion,
+    regardless of `reassign_to` - see CategoryInUse. A category with
+    TRANSACTIONS blocks deletion only if no `reassign_to` is given; with
+    one, every matching transaction is moved to it in the same transaction
+    as the delete, so the two can never observably happen apart.
+    `reassign_to` equal to `category_id` itself is treated as if it were
+    not given at all - reassigning something to itself is a no-op, not an
+    error.
 
     Raises:
         CategoryNotFound: `reassign_to` was given and doesn't belong to
             user_id.
-        CategoryInUse: a budget targets this category, or transactions do
-            and no usable `reassign_to` was given.
+        CategoryInUse: a budget or goal targets this category, or
+            transactions do and no usable `reassign_to` was given.
     """
     category = await get_category(session, user_id=user_id, category_id=category_id)
     if category is None:
@@ -272,8 +279,13 @@ async def delete_category(
             .limit(1)
         )
     ).scalar_one_or_none() is not None
-    if has_budget:
-        raise CategoryInUse(has_budget=True, transaction_count=0)
+    has_goal = (
+        await session.execute(
+            select(Goal.id).where(Goal.user_id == user_id, Goal.category_id == category_id).limit(1)
+        )
+    ).scalar_one_or_none() is not None
+    if has_budget or has_goal:
+        raise CategoryInUse(has_budget=has_budget, has_goal=has_goal, transaction_count=0)
 
     transaction_count = (
         await session.execute(
@@ -285,7 +297,9 @@ async def delete_category(
 
     if transaction_count > 0:
         if reassign_to is None:
-            raise CategoryInUse(has_budget=False, transaction_count=transaction_count)
+            raise CategoryInUse(
+                has_budget=False, has_goal=False, transaction_count=transaction_count
+            )
         if await get_category(session, user_id=user_id, category_id=reassign_to) is None:
             raise CategoryNotFound(reassign_to)
         await session.execute(

@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.tokens import create_access_token
-from app.models import Category, Transaction, User
+from app.models import Category, Goal, Transaction, User
 from app.services.budget import create_budget
 from app.services.category import create_category
 from app.services.user import create_user
@@ -45,6 +45,14 @@ async def add_transaction(
     await session.commit()
     await session.refresh(transaction)
     return transaction
+
+
+async def add_goal(session: AsyncSession, user: User, *, category_id: uuid.UUID) -> Goal:
+    goal = Goal(user_id=user.id, category_id=category_id, target_amount=Decimal("5000.00"))
+    session.add(goal)
+    await session.commit()
+    await session.refresh(goal)
+    return goal
 
 
 def url(category_id: object, **params: object) -> str:
@@ -135,6 +143,52 @@ class TestBudgetBlocksDeletion:
         await create_budget(
             db_session, user_id=user.id, category_id=category.id, limit_amount=Decimal("500")
         )
+
+        await db_client.delete(url(category.id), headers=auth(user))
+
+        found = (
+            await db_session.execute(select(Category).where(Category.id == category.id))
+        ).scalar_one_or_none()
+        assert found is not None
+
+
+@pytest.mark.integration
+class TestGoalBlocksDeletion:
+    """Mirrors TestBudgetBlocksDeletion - a goal is the same kind of
+    deliberate single-category assignment as a budget, so it gets the same
+    treatment in delete_category."""
+
+    async def test_a_category_with_a_goal_cannot_be_deleted(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+        category = await add_category(db_session, user)
+        await add_goal(db_session, user, category_id=category.id)
+
+        response = await db_client.delete(url(category.id), headers=auth(user))
+
+        assert response.status_code == 409
+
+    async def test_a_goal_blocks_deletion_even_with_reassign_to(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+        category = await add_category(db_session, user, name="Emergency Fund")
+        other = await add_category(db_session, user, name="Dining")
+        await add_goal(db_session, user, category_id=category.id)
+
+        response = await db_client.delete(
+            url(category.id, reassign_to=other.id), headers=auth(user)
+        )
+
+        assert response.status_code == 409
+
+    async def test_the_category_still_exists_after_a_goal_blocked_delete(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        user = await register(db_session)
+        category = await add_category(db_session, user)
+        await add_goal(db_session, user, category_id=category.id)
 
         await db_client.delete(url(category.id), headers=auth(user))
 
