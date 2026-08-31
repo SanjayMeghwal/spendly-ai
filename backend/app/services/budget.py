@@ -154,6 +154,27 @@ async def update_budget(
     return budget
 
 
+async def delete_budget(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    budget_id: uuid.UUID,
+) -> bool:
+    """Delete a budget. Returns whether a row was actually deleted.
+
+    Hard delete, same reasoning as delete_transaction: a budget is removed
+    only when its owner asks to stop tracking a category, and there is no
+    audit or undelete feature yet that would need the row to survive.
+    """
+    budget = await get_budget(session, user_id=user_id, budget_id=budget_id)
+    if budget is None:
+        return False
+
+    await session.delete(budget)
+    await session.commit()
+    return True
+
+
 async def list_budgets(session: AsyncSession, *, user_id: uuid.UUID) -> list[Budget]:
     """Return one user's budgets, alphabetically by category.
 

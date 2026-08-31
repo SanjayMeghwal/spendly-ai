@@ -19,6 +19,7 @@ from app.schemas.budget import BudgetCreate, BudgetRead, BudgetUpdate
 from app.services.budget import (
     BudgetCategoryAlreadyExists,
     create_budget,
+    delete_budget,
     get_budget,
     list_budgets,
     spent_for_category,
@@ -188,3 +189,19 @@ async def update(
         raise _not_found()
     year, month = _resolve_month(None)
     return await _to_read_model(db, budget, year=year, month=month)
+
+
+@router.delete(
+    "/{budget_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete one of the authenticated user's budgets",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No budget with that id."}},
+)
+async def delete(
+    budget_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> None:
+    deleted = await delete_budget(db, user_id=current_user.id, budget_id=budget_id)
+    if not deleted:
+        raise _not_found()
