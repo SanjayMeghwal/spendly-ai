@@ -30,8 +30,37 @@ See "Working style" below — it is not optional.
 | Done (M4) | Budget model (positive `NUMERIC(12,2)` limit) · full CRUD · spend-vs-limit computed live from `transactions`, net signed sum, per calendar month |
 | Done (M5) | Category model (case-insensitive unique name per user) · full CRUD · `Transaction`/`Budget` cut over from free-text `category` to a real `category_id` FK via a 4-migration expand/contract sequence · reads denormalize `category_name` via a bulk lookup (no N+1) · `DELETE /categories/{id}` reassigns transactions (`?reassign_to=`) but always blocks on an active budget · tests (397, 99%) |
 | Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · health probes |
-| Next | **Milestone 6**: not yet planned |
-| Not started | frontend, AI (later milestones) |
+| Next | **Milestone 6 — goals**: mirrors Budget's shape (target amount, target date, progress computed live) |
+
+---
+
+## Roadmap (M6+)
+
+Sketched 2026-08-31, not yet started past M6. Sized to match M1–M5's own
+granularity — one coherent resource or capability per milestone. Revisit
+before starting each one; this is a plan, not a commitment.
+
+| # | Milestone | Covers |
+|---|---|---|
+| 6 | Goals | New resource, mirrors `Budget` — target amount/date, live progress |
+| 7 | Reporting API | Read-only aggregation over existing data (spend by category over time, month-over-month, balance trend) — prerequisite for a dashboard |
+| 8 | CSV import | Bulk transaction creation from an uploaded file — parsing, validation, de-dup |
+| 9 | Frontend MVP | React/TS/Vite/Tailwind — auth + CRUD screens for every resource so far + dashboard on M7's endpoints. First demoable product. |
+| 10 | AI: embeddings + retrieval | Ollama + pgvector (provisioned since M1, unused until now) — embed a user's financial data, build retrieval over it |
+| 11 | AI: RAG chat | Natural-language Q&A over a user's finances — backend endpoint + chat UI |
+| 12 | Multi-agent orchestration | LangGraph agents on M10/M11 — e.g. auto-categorization suggestions, a budget-advisor agent |
+
+Two judgment calls baked into this order, worth revisiting if priorities
+change:
+- **Goals (M6) before Frontend (M9), not after** — matches M3–M5's
+  backend-first pattern. The alternative is shipping Frontend MVP earlier
+  to get a visible demo sooner, with Goals added as a full-stack feature
+  later.
+- **Frontend is one MVP milestone, not split per-resource** — a frontend
+  with auth but no way to see your data isn't a usable product. The
+  alternative is mirroring the backend's own history (`frontend-auth`,
+  `frontend-transactions`, ...), trading a much bigger milestone for
+  smaller, easier-to-review ones.
 
 ---
 
