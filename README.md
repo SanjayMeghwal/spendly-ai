@@ -7,11 +7,13 @@ Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
 > **Status: early development.** Milestones 1 (walking skeleton), 2
-> (authentication), 3 (transactions), and 4 (budgets) are complete — the API,
-> database, migrations, tests, and CI pipeline all run end to end, the auth
-> flow issues, rotates, and revokes tokens, every user can record, list, edit,
-> and delete their own transactions, and every user can set a monthly
-> spending limit per category and see how their actual spend compares.
+> (authentication), 3 (transactions), 4 (budgets), and 5 (categories) are
+> complete — the API, database, migrations, tests, and CI pipeline all run
+> end to end, the auth flow issues, rotates, and revokes tokens, every user
+> can record, list, edit, and delete their own transactions, every user can
+> set a monthly spending limit per category and see how their actual spend
+> compares, and categories are now a real resource — renameable, with
+> transactions moved out of one before it's deleted — rather than free text.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -42,7 +44,8 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | Authentication & user profiles | ✅ Done |
 | Income & expense tracking | ✅ Done |
 | Budgets | ✅ Done |
-| Categories, goals | ⬜ Planned |
+| Categories | ✅ Done |
+| Goals | ⬜ Planned |
 | Dashboard & analytics | ⬜ Planned |
 | CSV import & reports | ⬜ Planned |
 | AI financial assistant (RAG) | ⬜ Planned |
@@ -119,6 +122,11 @@ Interactive docs at `/docs` when `ENVIRONMENT` is not `production`.
 | `GET` | `/api/v1/budgets/{id}` | access token | Get one of the caller's budgets, with a month's spend |
 | `PATCH` | `/api/v1/budgets/{id}` | access token | Partially update one of the caller's budgets |
 | `DELETE` | `/api/v1/budgets/{id}` | access token | Delete one of the caller's budgets |
+| `POST` | `/api/v1/categories` | access token | Create a category |
+| `GET` | `/api/v1/categories` | access token | List the caller's categories |
+| `GET` | `/api/v1/categories/{id}` | access token | Get one of the caller's categories |
+| `PATCH` | `/api/v1/categories/{id}` | access token | Rename one of the caller's categories |
+| `DELETE` | `/api/v1/categories/{id}` | access token | Delete a category (`?reassign_to=` moves its transactions first) |
 | `GET` | `/health` | — | Liveness — process is up |
 | `GET` | `/health/ready` | — | Readiness — database answers |
 
@@ -137,17 +145,30 @@ to someone else answers 404, identical to an id that does not exist at all.
 Money is a signed `NUMERIC(12,2)`: negative is money out, positive is money
 in, so a balance is a single `SUM(amount)`. Updates are partial (`PATCH`):
 a field left out of the request body is untouched, while a nullable field
-(`category`, `notes`) sent explicitly as `null` is cleared.
+(`category_id`, `notes`) sent explicitly as `null` is cleared. Reads include
+a `category_name` alongside `category_id` — resolved from `categories`, not
+stored on the row, with one bulk lookup per page rather than a query per
+transaction.
 
-**Budgets.** A budget is a monthly spending limit for one category, matched
-against `transactions.category` case-insensitively (there is no separate
-Categories resource yet — both remain free-text). A user can have at most
-one budget per category; renaming into a name that collides, in either case,
-is rejected as `409`. `spent` is not a stored column — it is computed on
-every read as the net signed sum of that category's transactions for the
+**Budgets.** A budget is a monthly spending limit for one category,
+referenced by `category_id`. A user can have at most one budget per
+category; switching a budget to a category that already has one is
+rejected as `409`. `spent` is not a stored column — it is computed on every
+read as the net signed sum of that category's transactions for the
 requested month (defaulting to the current UTC month, or `?month=YYYY-MM`
 on either `GET`), so a refund automatically offsets spend rather than being
 ignored.
+
+**Categories.** A real, renameable resource — `Transaction.category_id` and
+`Budget.category_id` are both foreign keys into it, not free text, so a
+rename is a single-row update rather than a bulk rewrite. Names are unique
+per user, case-insensitively. Deleting a category is deliberately not a
+plain cascade: a category with an **active budget** always blocks deletion
+— merging two budgets' limits isn't something to do automatically, so the
+budget has to be deleted or repointed first. A category with
+**transactions** blocks deletion unless the request supplies
+`?reassign_to=<category_id>`, which moves every matching transaction to the
+target category in the same operation as the delete.
 
 ---
 

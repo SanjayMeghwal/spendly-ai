@@ -23,13 +23,14 @@ See "Working style" below — it is not optional.
 
 | | |
 |---|---|
-| Milestone | **4 — budgets** — complete |
+| Milestone | **5 — categories** — complete |
 | Done (M1) | git hygiene · uv deps · Postgres+pgvector container · validated config · async engine + session · FastAPI app · liveness/readiness probes · Alembic (baseline) · CI |
 | Done (M2) | User + RefreshToken models · 3 migrations · Argon2id hashing · JWT access tokens · refresh rotation with reuse detection · logout · logout-all via `token_version` · `/me` · tests (210, 99%) |
-| Done (M3) | Transaction model (signed `NUMERIC(12,2)`, free-text category) · 1 migration · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` · tests (260, 99%) |
-| Done (M4) | Budget model (positive `NUMERIC(12,2)` limit, case-insensitive unique category per user) · 1 migration · full CRUD · spend-vs-limit computed live from `transactions`, case-insensitive category match, net signed sum, per calendar month · tests (328, 99%) |
-| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · health probes |
-| Next | **Milestone 5**: not yet planned |
+| Done (M3) | Transaction model (signed `NUMERIC(12,2)`) · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` |
+| Done (M4) | Budget model (positive `NUMERIC(12,2)` limit) · full CRUD · spend-vs-limit computed live from `transactions`, net signed sum, per calendar month |
+| Done (M5) | Category model (case-insensitive unique name per user) · full CRUD · `Transaction`/`Budget` cut over from free-text `category` to a real `category_id` FK via a 4-migration expand/contract sequence · reads denormalize `category_name` via a bulk lookup (no N+1) · `DELETE /categories/{id}` reassigns transactions (`?reassign_to=`) but always blocks on an active budget · tests (397, 99%) |
+| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · health probes |
+| Next | **Milestone 6**: not yet planned |
 | Not started | frontend, AI (later milestones) |
 
 ---
