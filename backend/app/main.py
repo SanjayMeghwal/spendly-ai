@@ -13,7 +13,7 @@ from fastapi.exceptions import RequestValidationError
 
 from app import __version__
 from app.api.errors import validation_exception_handler
-from app.api.routes import auth, budgets, categories, goals, health, transactions
+from app.api.routes import auth, budgets, categories, goals, health, reports, transactions
 from app.core.config import get_settings
 from app.db.session import engine
 
@@ -73,6 +73,7 @@ app.include_router(transactions.router, prefix=settings.API_V1_PREFIX)
 app.include_router(budgets.router, prefix=settings.API_V1_PREFIX)
 app.include_router(categories.router, prefix=settings.API_V1_PREFIX)
 app.include_router(goals.router, prefix=settings.API_V1_PREFIX)
+app.include_router(reports.router, prefix=settings.API_V1_PREFIX)
 
 # Replaces FastAPI's default 422 handler, which serialises pydantic's error
 # list verbatim - including an "input" key holding the REJECTED VALUE. For a
