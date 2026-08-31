@@ -7,15 +7,17 @@ Built incrementally with a spec-driven workflow, as a production-oriented
 portfolio project.
 
 > **Status: early development.** Milestones 1 (walking skeleton), 2
-> (authentication), 3 (transactions), 4 (budgets), 5 (categories), and 6
-> (goals) are complete — the API, database, migrations, tests, and CI
-> pipeline all run end to end, the auth flow issues, rotates, and revokes
-> tokens, every user can record, list, edit, and delete their own
-> transactions, every user can set a monthly spending limit per category
-> and see how their actual spend compares, categories are a real resource
-> — renameable, with transactions moved out of one before it's deleted —
-> rather than free text, and every user can set a savings target per
-> category and see live progress toward it.
+> (authentication), 3 (transactions), 4 (budgets), 5 (categories), 6
+> (goals), and 7 (reporting) are complete — the API, database, migrations,
+> tests, and CI pipeline all run end to end, the auth flow issues, rotates,
+> and revokes tokens, every user can record, list, edit, and delete their
+> own transactions, every user can set a monthly spending limit per
+> category and see how their actual spend compares, categories are a real
+> resource — renameable, with transactions moved out of one before it's
+> deleted — rather than free text, every user can set a savings target per
+> category and see live progress toward it, and every user can pull
+> spend-by-category and month-over-month income/expense reports over their
+> own data.
 > The feature table below marks what actually exists today, not what is planned.
 
 ---
@@ -48,8 +50,9 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | Budgets | ✅ Done |
 | Categories | ✅ Done |
 | Goals | ✅ Done |
-| Dashboard & analytics | ⬜ Planned |
-| CSV import & reports | ⬜ Planned |
+| Reporting API | ✅ Done |
+| CSV import | ⬜ Planned |
+| Frontend | ⬜ Planned |
 | AI financial assistant (RAG) | ⬜ Planned |
 | Multi-agent orchestration | ⬜ Planned |
 
@@ -134,6 +137,8 @@ Interactive docs at `/docs` when `ENVIRONMENT` is not `production`.
 | `GET` | `/api/v1/goals/{id}` | access token | Get one of the caller's goals, with live progress |
 | `PATCH` | `/api/v1/goals/{id}` | access token | Partially update one of the caller's goals |
 | `DELETE` | `/api/v1/goals/{id}` | access token | Delete one of the caller's goals |
+| `GET` | `/api/v1/reports/spend-by-category` | access token | Net spend per category for one month, largest first |
+| `GET` | `/api/v1/reports/monthly-summary` | access token | Income/expenses/net for the last N months, oldest first |
 | `GET` | `/health` | — | Liveness — process is up |
 | `GET` | `/health/ready` | — | Readiness — database answers |
 
@@ -188,6 +193,20 @@ goal has no reset period. `remaining` (`target_amount - progress`) is
 shown uncapped when a goal is overshot rather than clamped at zero.
 `target_date` is optional and, unlike `category_id`/`target_amount`, can be
 cleared by sending it explicitly as `null` in a `PATCH`.
+
+**Reports.** Read-only aggregation over `transactions` — no model, no
+migration, nothing to create or delete. `spend-by-category` returns one
+row per category actually used in the requested month (default: the
+current UTC month), `spent` computed the same way as a budget's `spent`
+(net signed sum, so a refund offsets spend), sorted largest first;
+transactions with no category collapse into a synthetic `Uncategorized`
+row rather than being dropped. `monthly-summary` returns the last N
+calendar months (default 6, capped at 24) oldest first, each with
+`income`, `expenses` (both non-negative magnitudes), and `net`; a month
+with no transactions still appears, zero-filled, so a quiet month doesn't
+vanish from a trend chart. There is no dedicated balance-trend endpoint —
+a client derives a running balance from `monthly-summary` via a cumulative
+sum of `net`.
 
 ---
 

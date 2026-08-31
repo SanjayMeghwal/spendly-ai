@@ -23,27 +23,27 @@ See "Working style" below — it is not optional.
 
 | | |
 |---|---|
-| Milestone | **6 — goals** — complete |
+| Milestone | **7 — reporting API** — complete |
 | Done (M1) | git hygiene · uv deps · Postgres+pgvector container · validated config · async engine + session · FastAPI app · liveness/readiness probes · Alembic (baseline) · CI |
 | Done (M2) | User + RefreshToken models · 3 migrations · Argon2id hashing · JWT access tokens · refresh rotation with reuse detection · logout · logout-all via `token_version` · `/me` · tests (210, 99%) |
 | Done (M3) | Transaction model (signed `NUMERIC(12,2)`) · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` |
 | Done (M4) | Budget model (positive `NUMERIC(12,2)` limit) · full CRUD · spend-vs-limit computed live from `transactions`, net signed sum, per calendar month |
 | Done (M5) | Category model (case-insensitive unique name per user) · full CRUD · `Transaction`/`Budget` cut over from free-text `category` to a real `category_id` FK via a 4-migration expand/contract sequence · reads denormalize `category_name` via a bulk lookup (no N+1) · `DELETE /categories/{id}` reassigns transactions (`?reassign_to=`) but always blocks on an active budget |
 | Done (M6) | Goal model (positive `NUMERIC(12,2)` target, optional `Date` deadline) · full CRUD · progress computed live from `transactions`, same sign convention as Budget's `spent` but cumulative, no month window · `remaining` shown uncapped when overshot · `delete_category` extended to block on an active goal, same as it already did for budgets · tests (471, 99%) |
-| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · `POST/GET /goals` `GET/PATCH/DELETE /goals/{id}` · health probes |
-| Next | **Milestone 7 — reporting API**: read-only aggregation over existing data, prerequisite for a dashboard |
+| Done (M7) | Reporting API — no model/migration, pure aggregation over `transactions`/`categories` · `GET /reports/spend-by-category` (net spend per category, one calendar month, largest first, synthetic "Uncategorized" bucket) · `GET /reports/monthly-summary` (income/expenses/net for the last N months, default 6, zero-filled for quiet months) · no dedicated balance-trend endpoint — client derives it via cumulative sum · tests (492, 99%) |
+| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · `POST/GET /goals` `GET/PATCH/DELETE /goals/{id}` · `GET /reports/spend-by-category` `GET /reports/monthly-summary` · health probes |
+| Next | **Milestone 8 — CSV import**: bulk transaction creation from an uploaded file — parsing, validation, de-dup |
 
 ---
 
-## Roadmap (M7+)
+## Roadmap (M8+)
 
-Sketched 2026-08-31, not yet started past M6. Sized to match M1–M6's own
+Sketched 2026-08-31, not yet started past M7. Sized to match M1–M7's own
 granularity — one coherent resource or capability per milestone. Revisit
 before starting each one; this is a plan, not a commitment.
 
 | # | Milestone | Covers |
 |---|---|---|
-| 7 | Reporting API | Read-only aggregation over existing data (spend by category over time, month-over-month, balance trend) — prerequisite for a dashboard |
 | 8 | CSV import | Bulk transaction creation from an uploaded file — parsing, validation, de-dup |
 | 9 | Frontend MVP | React/TS/Vite/Tailwind — auth + CRUD screens for every resource so far + dashboard on M7's endpoints. First demoable product. |
 | 10 | AI: embeddings + retrieval | Ollama + pgvector (provisioned since M1, unused until now) — embed a user's financial data, build retrieval over it |
