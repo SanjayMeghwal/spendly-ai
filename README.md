@@ -8,10 +8,11 @@ portfolio project.
 
 > **Status: early development.** Milestones 1 (walking skeleton), 2
 > (authentication), 3 (transactions), 4 (budgets), 5 (categories), 6
-> (goals), and 7 (reporting) are complete — the API, database, migrations,
-> tests, and CI pipeline all run end to end, the auth flow issues, rotates,
-> and revokes tokens, every user can record, list, edit, and delete their
-> own transactions, every user can set a monthly spending limit per
+> (goals), 7 (reporting), and 8 (CSV import) are complete — the API,
+> database, migrations, tests, and CI pipeline all run end to end, the auth
+> flow issues, rotates, and revokes tokens, every user can record, list,
+> edit, and delete their own transactions (one at a time, or in bulk from
+> an uploaded CSV), every user can set a monthly spending limit per
 > category and see how their actual spend compares, categories are a real
 > resource — renameable, with transactions moved out of one before it's
 > deleted — rather than free text, every user can set a savings target per
@@ -51,7 +52,7 @@ Every dependency is open-source and free to run locally. No paid APIs.
 | Categories | ✅ Done |
 | Goals | ✅ Done |
 | Reporting API | ✅ Done |
-| CSV import | ⬜ Planned |
+| CSV import | ✅ Done |
 | Frontend | ⬜ Planned |
 | AI financial assistant (RAG) | ⬜ Planned |
 | Multi-agent orchestration | ⬜ Planned |
@@ -122,6 +123,7 @@ Interactive docs at `/docs` when `ENVIRONMENT` is not `production`.
 | `GET` | `/api/v1/transactions/{id}` | access token | Get one of the caller's transactions |
 | `PATCH` | `/api/v1/transactions/{id}` | access token | Partially update one of the caller's transactions |
 | `DELETE` | `/api/v1/transactions/{id}` | access token | Delete one of the caller's transactions |
+| `POST` | `/api/v1/transactions/import` | access token | Bulk-create transactions from an uploaded CSV |
 | `POST` | `/api/v1/budgets` | access token | Set a monthly spending limit for a category |
 | `GET` | `/api/v1/budgets` | access token | List the caller's budgets, each with this month's spend |
 | `GET` | `/api/v1/budgets/{id}` | access token | Get one of the caller's budgets, with a month's spend |
@@ -207,6 +209,20 @@ with no transactions still appears, zero-filled, so a quiet month doesn't
 vanish from a trend chart. There is no dedicated balance-trend endpoint —
 a client derives a running balance from `monthly-summary` via a cumulative
 sum of `net`.
+
+**CSV import.** Bulk-creates transactions from an uploaded file with a
+fixed `date,amount,description,category` header (`category` optional).
+The request always answers `200` — a partially-successful import is still
+a successful request, so a bad row is skipped and reported back in
+`errors` (row number + reason) rather than blocking the rest of the file.
+Only a structurally broken upload (bad encoding, a missing required
+column, or more than 2000 rows) fails the whole request with `422`. A row
+is a duplicate - skipped, not an error - if a transaction with the same
+`(date, amount, description)` already exists for the caller, checked
+against both the database and earlier rows already accepted from the same
+file; `category` is matched case-insensitively against the caller's
+existing categories only, and an unmatched or blank cell becomes
+Uncategorized rather than creating a new category on the fly.
 
 ---
 
