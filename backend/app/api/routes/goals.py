@@ -8,6 +8,7 @@ OWNER, matching app/api/routes/budgets.py exactly - see that module's
 docstring for the full reasoning.
 """
 
+import uuid
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, status
@@ -19,11 +20,17 @@ from app.services.category import CategoryNotFound, get_category_names
 from app.services.goal import (
     GoalCategoryAlreadyExists,
     create_goal,
+    get_goal,
     list_goals,
     progress_for_category,
 )
 
 router = APIRouter(prefix="/goals", tags=["goals"])
+
+
+def _not_found() -> HTTPException:
+    """The single 404 for 'no such goal of yours', matching budgets.py."""
+    return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No goal with that id.")
 
 
 def _conflict() -> HTTPException:
@@ -124,3 +131,25 @@ async def list_mine(current_user: CurrentUser, db: DbSession) -> list[GoalRead]:
     # category_id, not a string) - sorting on the resolved name happens
     # here, once the name is actually known, same as budgets.py's list_mine.
     return sorted(results, key=lambda r: r.category_name)
+
+
+@router.get(
+    "/{goal_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=GoalRead,
+    summary="Get one of the authenticated user's goals, with progress",
+    responses={status.HTTP_404_NOT_FOUND: {"description": "No goal with that id."}},
+)
+async def get_one(
+    goal_id: uuid.UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> GoalRead:
+    goal = await get_goal(db, user_id=current_user.id, goal_id=goal_id)
+    if goal is None:
+        raise _not_found()
+    names = await get_category_names(db, user_id=current_user.id, category_ids={goal.category_id})
+    progress = await progress_for_category(
+        db, user_id=current_user.id, category_id=goal.category_id
+    )
+    return await _to_read_model(goal, names[goal.category_id], progress=progress)
