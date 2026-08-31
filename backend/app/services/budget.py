@@ -82,6 +82,20 @@ async def create_budget(
     return budget
 
 
+async def list_budgets(session: AsyncSession, *, user_id: uuid.UUID) -> list[Budget]:
+    """Return one user's budgets, alphabetically by category.
+
+    No pagination, unlike list_transactions: a user has at most a few dozen
+    categories, bounded by how many distinct things they actually spend
+    money on - nothing like an ever-growing transaction history - so the
+    concern that justified pagination there doesn't apply here.
+    """
+    result = await session.execute(
+        select(Budget).where(Budget.user_id == user_id).order_by(Budget.category)
+    )
+    return list(result.scalars().all())
+
+
 def _month_bounds(year: int, month: int) -> tuple[datetime, datetime]:
     """The [start, end) UTC range covering one calendar month.
 

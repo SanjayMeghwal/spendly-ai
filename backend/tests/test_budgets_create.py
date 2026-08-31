@@ -219,9 +219,7 @@ class TestValidation:
     ) -> None:
         user = await register(db_session)
 
-        response = await db_client.post(
-            BUDGETS_URL, json=payload(category=""), headers=auth(user)
-        )
+        response = await db_client.post(BUDGETS_URL, json=payload(category=""), headers=auth(user))
 
         assert response.status_code == 422
 
@@ -288,9 +286,7 @@ class TestDuplicateCategory:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         user = await register(db_session)
-        await db_client.post(
-            BUDGETS_URL, json=payload(category="Groceries"), headers=auth(user)
-        )
+        await db_client.post(BUDGETS_URL, json=payload(category="Groceries"), headers=auth(user))
 
         response = await db_client.post(
             BUDGETS_URL, json=payload(category="groceries"), headers=auth(user)
