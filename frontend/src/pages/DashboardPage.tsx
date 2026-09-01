@@ -16,6 +16,9 @@ export function DashboardPage() {
       <Link to="/budgets" className="text-slate-900 underline">
         View budgets
       </Link>
+      <Link to="/goals" className="text-slate-900 underline">
+        View goals
+      </Link>
       <button
         type="button"
         onClick={() => void logout()}
