@@ -10,3 +10,12 @@ export function formatMoney(amount: string): string {
     maximumFractionDigits: 2,
   })
 }
+
+// Compact form (1.2K, 4.2M) for tight spaces like chart bar-tip labels,
+// where a full "$1,234.00" would overflow or force the chart wider.
+export function formatCompactMoney(amount: string): string {
+  return Number(amount).toLocaleString(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  })
+}
