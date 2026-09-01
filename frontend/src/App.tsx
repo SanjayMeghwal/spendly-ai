@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
+import { Route, Routes } from 'react-router-dom'
 
 type HealthStatus = 'loading' | 'ok' | 'error'
 
-function App() {
+function HealthCheckPage() {
   const [status, setStatus] = useState<HealthStatus>('loading')
 
   useEffect(() => {
-    fetch('http://localhost:8000/health')
+    fetch(`${import.meta.env.VITE_API_URL}/health`)
       .then((res) => (res.ok ? setStatus('ok') : setStatus('error')))
       .catch(() => setStatus('error'))
   }, [])
@@ -29,6 +30,14 @@ function App() {
         </span>
       </p>
     </main>
+  )
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<HealthCheckPage />} />
+    </Routes>
   )
 }
 
