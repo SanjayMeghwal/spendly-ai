@@ -10,6 +10,9 @@ export function DashboardPage() {
       <Link to="/transactions" className="text-slate-900 underline">
         View transactions
       </Link>
+      <Link to="/categories" className="text-slate-900 underline">
+        Manage categories
+      </Link>
       <button
         type="button"
         onClick={() => void logout()}
