@@ -12,20 +12,13 @@ import {
   type TransactionCreateInput,
 } from '../api/transactions'
 import { TransactionForm } from '../components/TransactionForm'
+import { formatMoney } from '../lib/format'
 
 const PAGE_SIZE = 20
 
 function formatAmount(amount: string): string {
-  // amount is a signed decimal string ("-12.50") - Number() here is only for
-  // display formatting (adding a $ and thousands separators), never for
-  // storage or calculation, so the precision loss it could theoretically
-  // introduce never reaches anything that matters.
   const value = Number(amount)
-  const formatted = Math.abs(value).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-  return value < 0 ? `-$${formatted}` : `$${formatted}`
+  return value < 0 ? `-$${formatMoney(amount.replace('-', ''))}` : `$${formatMoney(amount)}`
 }
 
 export function TransactionsPage() {

@@ -5,14 +5,7 @@ import { listCategories } from '../api/categories'
 import { ApiError } from '../api/client'
 import { createGoal, deleteGoal, listGoals, updateGoal, type Goal, type GoalCreateInput } from '../api/goals'
 import { GoalForm } from '../components/GoalForm'
-
-function formatAmount(amount: string): string {
-  // Display-only Number() use, same reasoning as transactions.ts/budgets.ts.
-  return Number(amount).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-}
+import { formatMoney } from '../lib/format'
 
 export function GoalsPage() {
   const queryClient = useQueryClient()
@@ -145,15 +138,15 @@ export function GoalsPage() {
                 <div className="h-full bg-green-600" style={{ width: `${pct}%` }} />
               </div>
               <p className="text-sm text-slate-600">
-                ${formatAmount(g.progress)} of ${formatAmount(g.target_amount)} saved —{' '}
+                ${formatMoney(g.progress)} of ${formatMoney(g.target_amount)} saved —{' '}
                 {isMet ? (
                   <span className="text-green-600">
                     Goal reached!{' '}
                     {Number(g.remaining) < 0 &&
-                      `$${formatAmount(g.remaining.replace('-', ''))} extra saved`}
+                      `$${formatMoney(g.remaining.replace('-', ''))} extra saved`}
                   </span>
                 ) : (
-                  <span>${formatAmount(g.remaining)} to go</span>
+                  <span>${formatMoney(g.remaining)} to go</span>
                 )}
               </p>
             </li>

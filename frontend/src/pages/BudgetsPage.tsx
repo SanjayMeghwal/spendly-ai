@@ -10,17 +10,9 @@ import {
 } from '../api/budgets'
 import { listCategories } from '../api/categories'
 import { ApiError } from '../api/client'
+import { formatMoney } from '../lib/format'
 
 const AMOUNT_PATTERN = /^\d{1,10}(\.\d{1,2})?$/
-
-function formatAmount(amount: string): string {
-  // Same display-only Number() use as transactions.ts's formatAmount -
-  // never used for storage or calculation, only formatting.
-  return Number(amount).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })
-}
 
 export function BudgetsPage() {
   const queryClient = useQueryClient()
@@ -216,9 +208,9 @@ export function BudgetsPage() {
                     />
                   </div>
                   <p className="text-sm text-slate-600">
-                    ${formatAmount(b.spent)} of ${formatAmount(b.limit_amount)} spent —{' '}
+                    ${formatMoney(b.spent)} of ${formatMoney(b.limit_amount)} spent —{' '}
                     <span className={isOverBudget ? 'text-red-600' : 'text-green-600'}>
-                      {isOverBudget ? 'over by' : ''} ${formatAmount(b.remaining.replace('-', ''))}{' '}
+                      {isOverBudget ? 'over by' : ''} ${formatMoney(b.remaining.replace('-', ''))}{' '}
                       {isOverBudget ? '' : 'remaining'}
                     </span>
                   </p>
