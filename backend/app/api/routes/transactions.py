@@ -25,11 +25,13 @@ from app.models import Transaction
 from app.schemas.transaction import TransactionCreate, TransactionRead, TransactionUpdate
 from app.schemas.transaction_import import TransactionImportError, TransactionImportResult
 from app.services.category import CategoryNotFound, get_category_names
+from app.services.embedding import EmbeddingError, embed_text
 from app.services.transaction import (
     create_transaction,
     delete_transaction,
     get_transaction,
     list_transactions,
+    search_transactions,
     update_transaction,
 )
 from app.services.transaction_import import ImportRow, import_transactions
@@ -47,6 +49,21 @@ def _not_found() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail="No transaction with that id.",
+    )
+
+
+def _search_unavailable() -> HTTPException:
+    """503 for 'the query itself could not be embedded'.
+
+    Unlike create/import, which write happily without an embedding (see
+    embed_transaction_or_none), a search has no fallback: with no vector for
+    the query text, there is nothing to rank by. 503, matching
+    /health/ready's convention - this is "a dependency is temporarily down",
+    not a bug in the request.
+    """
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Search is temporarily unavailable.",
     )
 
 
@@ -272,6 +289,51 @@ async def list_mine(
     offset: int = Query(default=0, ge=0),
 ) -> list[TransactionRead]:
     transactions = await list_transactions(db, user_id=current_user.id, limit=limit, offset=offset)
+    category_ids = {t.category_id for t in transactions if t.category_id is not None}
+    category_names = await get_category_names(
+        db, user_id=current_user.id, category_ids=category_ids
+    )
+    return [_to_read_model(t, category_names) for t in transactions]
+
+
+@router.get(
+    "/search",
+    status_code=status.HTTP_200_OK,
+    response_model=list[TransactionRead],
+    summary="Semantic search over the authenticated user's transactions",
+    description=(
+        "Embeds the query and ranks this user's transactions by cosine "
+        "similarity, closest first. Transactions with no embedding yet "
+        "(not backfilled, or Ollama was unreachable when they were "
+        "written) are excluded, not ranked last."
+    ),
+    responses={
+        status.HTTP_503_SERVICE_UNAVAILABLE: {
+            "description": "The query could not be embedded - Ollama is unreachable."
+        },
+    },
+)
+async def search(
+    current_user: CurrentUser,
+    db: DbSession,
+    q: str = Query(min_length=1, max_length=500, description="Natural-language search text."),
+    # Same upper bound reasoning as list_mine's limit - a small, fixed cap
+    # regardless of what a client asks for.
+    limit: int = Query(default=10, ge=1, le=50),
+) -> list[TransactionRead]:
+    # Deliberately NOT embed_transaction_or_none: that function's whole
+    # point is "a missing embedding is fine, the write still succeeds
+    # without one" - true for a transaction row, false for a search query.
+    # A search with no query vector has nothing to rank by, so this must
+    # raise, not silently return no results.
+    try:
+        query_embedding = await embed_text(q)
+    except EmbeddingError:
+        raise _search_unavailable() from None
+
+    transactions = await search_transactions(
+        db, user_id=current_user.id, query_embedding=query_embedding, limit=limit
+    )
     category_ids = {t.category_id for t in transactions if t.category_id is not None}
     category_names = await get_category_names(
         db, user_id=current_user.id, category_ids=category_ids

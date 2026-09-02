@@ -142,6 +142,38 @@ async def get_transaction(
     return result.scalar_one_or_none()
 
 
+async def search_transactions(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    query_embedding: list[float],
+    limit: int,
+) -> list[Transaction]:
+    """Return this user's transactions most semantically similar to
+    query_embedding, closest match first.
+
+    Cosine distance (pgvector's `<=>` operator, via .cosine_distance() -
+    see pgvector.sqlalchemy.vector.VECTOR.Comparator) rather than L2:
+    cosine cares about the DIRECTION two vectors point, not their
+    magnitude, which is the right notion of "similar meaning" for text
+    embeddings - two descriptions of the same kind of purchase should
+    match regardless of how strongly-worded either one is.
+
+    Rows with no embedding yet - not backfilled, or Ollama was down when
+    they were created/imported, see embed_transaction_or_none - are
+    excluded rather than ranked last. There is no distance to compute
+    against a NULL vector, and asking PostgreSQL to order by one would
+    error, not merely rank it poorly.
+    """
+    result = await session.execute(
+        select(Transaction)
+        .where(Transaction.user_id == user_id, Transaction.embedding.is_not(None))
+        .order_by(Transaction.embedding.cosine_distance(query_embedding))
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def update_transaction(
     session: AsyncSession,
     *,
