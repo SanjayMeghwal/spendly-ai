@@ -7,6 +7,7 @@ available to every test in this directory and below without importing them.
 from collections.abc import AsyncGenerator, Iterator
 from typing import Any
 
+import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import NullPool
@@ -15,6 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.main import app as fastapi_app
+
+# Captured at import time, before any test can monkeypatch
+# app.services.embedding.httpx.AsyncClient - that patches the SAME class
+# object httpx.AsyncClient refers to everywhere (embedding.py's `httpx` is
+# the real module, not a copy), so stub_ollama_embeddings below must build
+# clients from this saved reference, not from httpx.AsyncClient, or it
+# recurses into itself.
+_RealAsyncClient = AsyncClient
 
 
 @pytest.fixture
@@ -30,6 +39,39 @@ async def client() -> AsyncGenerator[AsyncClient, None]:
     transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+@pytest.fixture(autouse=True)
+def stub_ollama_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for Ollama in every test, by default.
+
+    Embedding calls are the one place tests reach the network - the same
+    tier as a third-party API or an LLM call, which CLAUDE.md's testing
+    rules say to mock, never hit for real. Without this, every test that
+    creates a transaction (most of the suite, via create_transaction /
+    import_transactions) would make a real HTTP call to a locally-running
+    Ollama - coupling the whole suite's runtime, and in CI its very ability
+    to pass, to a process the test has no control over.
+
+    `autouse=True` applies this everywhere without each test file asking
+    for it. tests/test_service_embedding.py, which tests embed_text's own
+    HTTP-handling logic, re-monkeypatches the same attribute with its own
+    handler inside each of its tests - that later call simply overrides
+    this default for that one test; monkeypatch's teardown still restores
+    the true original afterwards regardless of how many times it was set.
+
+    The fake vector's values carry no meaning - nothing yet built on this
+    branch queries by similarity - it only needs to be a valid
+    Vector(768) so an insert doesn't fail on dimension mismatch.
+    """
+
+    def factory(*, base_url: str = "", **kwargs: object) -> httpx.AsyncClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"embedding": [0.1] * 768})
+
+        return _RealAsyncClient(base_url=base_url, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr("app.services.embedding.httpx.AsyncClient", factory)
 
 
 @pytest.fixture(autouse=True)

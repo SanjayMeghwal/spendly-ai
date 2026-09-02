@@ -8,12 +8,19 @@ else in this module touches the database, so none of these use
 """
 
 import json
+from collections.abc import Callable
+from decimal import Decimal
 
 import httpx
 import pytest
 
 from app.core.config import get_settings
-from app.services.embedding import EmbeddingError, embed_text
+from app.services.embedding import (
+    EmbeddingError,
+    build_transaction_embedding_text,
+    embed_text,
+    embed_transaction_or_none,
+)
 
 # Captured before any test monkeypatches httpx.AsyncClient. Patching
 # app.services.embedding.httpx.AsyncClient patches the SAME class object
@@ -24,7 +31,9 @@ from app.services.embedding import EmbeddingError, embed_text
 _RealAsyncClient = httpx.AsyncClient
 
 
-def _mock_client(handler):
+def _mock_client(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> Callable[..., httpx.AsyncClient]:
     """Build a factory that stands in for httpx.AsyncClient.
 
     embed_text constructs its own AsyncClient(base_url=..., timeout=...)
@@ -87,3 +96,50 @@ class TestEmbedText:
 
         with pytest.raises(EmbeddingError):
             await embed_text("anything")
+
+
+class TestBuildTransactionEmbeddingText:
+    def test_negative_amount_reads_as_an_expense(self) -> None:
+        text = build_transaction_embedding_text(
+            description="Grocery store", amount=Decimal("-42.50"), category_name="Groceries"
+        )
+
+        assert text == "Grocery store, expense of 42.50, category Groceries"
+
+    def test_positive_amount_reads_as_income(self) -> None:
+        text = build_transaction_embedding_text(
+            description="Paycheck", amount=Decimal("2000.00"), category_name=None
+        )
+
+        assert text == "Paycheck, income of 2000.00"
+
+
+class TestEmbedTransactionOrNone:
+    async def test_returns_the_embedding_on_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content)
+            assert body["prompt"] == "Grocery store, expense of 42.50, category Groceries"
+            return httpx.Response(200, json={"embedding": [0.1, 0.2, 0.3]})
+
+        monkeypatch.setattr("app.services.embedding.httpx.AsyncClient", _mock_client(handler))
+
+        result = await embed_transaction_or_none(
+            description="Grocery store", amount=Decimal("-42.50"), category_name="Groceries"
+        )
+
+        assert result == [0.1, 0.2, 0.3]
+
+    async def test_returns_none_instead_of_raising_when_ollama_is_down(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("connection refused", request=request)
+
+        monkeypatch.setattr("app.services.embedding.httpx.AsyncClient", _mock_client(handler))
+
+        result = await embed_transaction_or_none(
+            description="Grocery store", amount=Decimal("-42.50"), category_name="Groceries"
+        )
+
+        assert result is None
+        assert "Failed to embed transaction" in caplog.text

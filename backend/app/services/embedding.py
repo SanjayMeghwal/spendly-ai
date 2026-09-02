@@ -7,9 +7,14 @@ turning it into a vector is business logic, not I/O plumbing, so it lives
 in services/ rather than core/.
 """
 
+import logging
+from decimal import Decimal
+
 import httpx
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingError(Exception):
@@ -45,3 +50,50 @@ async def embed_text(text: str) -> list[float]:
     if not isinstance(embedding, list):
         raise EmbeddingError(f"Ollama response did not include an embedding: {payload}")
     return embedding
+
+
+def build_transaction_embedding_text(
+    *, description: str, amount: Decimal, category_name: str | None
+) -> str:
+    """Render a transaction as text for embed_text to turn into a vector.
+
+    Shared by services/transaction.py (create) and
+    services/transaction_import.py (CSV import) - the two write paths that
+    create transactions - so the text a transaction is embedded with cannot
+    drift between them.
+
+    Includes the sign as a word ("expense"/"income") rather than a raw "-",
+    and the category name when there is one - both are exactly the kind of
+    thing a natural-language query in the future RAG chat (M11) would ask
+    about ("what did I spend on groceries"), so they need to be in the text
+    that gets embedded, not just sitting in adjacent columns.
+    """
+    kind = "expense" if amount < 0 else "income"
+    text = f"{description}, {kind} of {abs(amount)}"
+    if category_name is not None:
+        text += f", category {category_name}"
+    return text
+
+
+async def embed_transaction_or_none(
+    *, description: str, amount: Decimal, category_name: str | None
+) -> list[float] | None:
+    """Best-effort transaction embedding: on any failure, log and return
+    None rather than raise.
+
+    Ollama runs as a bare local process, not in docker-compose.yml, so it
+    can be down without anyone noticing. transactions.embedding is nullable
+    for exactly this reason - a transaction is fully valid without one, it
+    simply will not surface in semantic search until a later backfill fills
+    it in. Blocking transaction creation or CSV import on a local AI server
+    being up would fail the app's core function over an optional
+    enhancement.
+    """
+    text = build_transaction_embedding_text(
+        description=description, amount=amount, category_name=category_name
+    )
+    try:
+        return await embed_text(text)
+    except EmbeddingError:
+        logger.warning("Failed to embed transaction; continuing without one", exc_info=True)
+        return None
