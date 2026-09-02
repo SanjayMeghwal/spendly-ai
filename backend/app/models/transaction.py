@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Index, Numeric, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -144,6 +145,22 @@ class Transaction(Base):
         server_default=func.now(),
         onupdate=func.now(),
         doc="UTC time of the last ORM-issued update.",
+    )
+
+    # --- AI: semantic search (M10) ------------------------------------------
+    # 768 dimensions matches Ollama's nomic-embed-text - see
+    # core/config.py's OLLAMA_EMBEDDING_MODEL. Nullable: rows created before
+    # M10, or before a backfill runs, have no embedding yet, and a
+    # transaction is still fully valid without one - semantic search simply
+    # will not surface it.
+    #
+    # No index yet. An ANN index (ivfflat/hnsw) tuned on a near-empty table
+    # would be poorly calibrated; it arrives in a follow-up migration once
+    # there's a realistic row count to tune it against.
+    embedding: Mapped[list[float] | None] = mapped_column(
+        Vector(768),
+        nullable=True,
+        doc="Semantic embedding of the transaction, for retrieval. Absent until backfilled.",
     )
 
     def __repr__(self) -> str:
