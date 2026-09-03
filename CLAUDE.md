@@ -23,7 +23,7 @@ See "Working style" below — it is not optional.
 
 | | |
 |---|---|
-| Milestone | **8 — CSV import** — complete |
+| Milestone | **9 — Frontend MVP** — complete |
 | Done (M1) | git hygiene · uv deps · Postgres+pgvector container · validated config · async engine + session · FastAPI app · liveness/readiness probes · Alembic (baseline) · CI |
 | Done (M2) | User + RefreshToken models · 3 migrations · Argon2id hashing · JWT access tokens · refresh rotation with reuse detection · logout · logout-all via `token_version` · `/me` · tests (210, 99%) |
 | Done (M3) | Transaction model (signed `NUMERIC(12,2)`) · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` |
@@ -32,14 +32,15 @@ See "Working style" below — it is not optional.
 | Done (M6) | Goal model (positive `NUMERIC(12,2)` target, optional `Date` deadline) · full CRUD · progress computed live from `transactions`, same sign convention as Budget's `spent` but cumulative, no month window · `remaining` shown uncapped when overshot · `delete_category` extended to block on an active goal, same as it already did for budgets · tests (471, 99%) |
 | Done (M7) | Reporting API — no model/migration, pure aggregation over `transactions`/`categories` · `GET /reports/spend-by-category` (net spend per category, one calendar month, largest first, synthetic "Uncategorized" bucket) · `GET /reports/monthly-summary` (income/expenses/net for the last N months, default 6, zero-filled for quiet months) · no dedicated balance-trend endpoint — client derives it via cumulative sum · tests (492, 99%) |
 | Done (M8) | CSV import — no model/migration, ordinary `Transaction` rows · `POST /transactions/import` (fixed `date,amount,description,category` schema, `python-multipart` dependency) · best-effort per-row validation (invalid rows reported back, never block the rest of the file) · de-dup on `(occurred_at, amount, description)` against the database and within the same file · category matched case-insensitively against the caller's existing categories only, nothing auto-created · tests (508, 99%) |
+| Done (M9) | Frontend MVP — `frontend/`, React + TypeScript + Vite + Tailwind · CORS added on the backend for the Vite dev origin · TanStack Query + a thin `apiRequest` fetch wrapper with transparent access-token refresh-on-401 (concurrent refreshes deduped) · tokens in `localStorage`, not an httpOnly cookie — a deliberate, documented, revisitable trade-off · auth screens (register auto-logs-in, login, protected routes) · full CRUD screens for transactions, categories, budgets, goals · a reporting dashboard on M7's endpoints (KPI tiles, income/expenses trend chart, spend-by-category ranked bars), colors chosen and validated per the dataviz skill · every screen browser-verified by hand, not just build/lint-checked · CSV import has no frontend UI yet — deferred, not missed |
 | Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` `POST /transactions/import` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · `POST/GET /goals` `GET/PATCH/DELETE /goals/{id}` · `GET /reports/spend-by-category` `GET /reports/monthly-summary` · health probes |
-| Next | **Milestone 9 — Frontend MVP**: React/TS/Vite/Tailwind — auth + CRUD screens for every resource so far + dashboard on M7's endpoints |
+| Next | **Milestone 10 — AI: embeddings + retrieval**: Ollama + pgvector (provisioned since M1, unused until now) — embed a user's financial data, build retrieval over it |
 
 ---
 
-## Roadmap (M9+)
+## Roadmap (M10+)
 
-Sketched 2026-08-31, not yet started past M8. Sized to match M1–M8's own
+Sketched 2026-08-31, not yet started past M9. Sized to match M1–M8's own
 granularity — one coherent resource or capability per milestone. Revisit
 before starting each one; this is a plan, not a commitment.
 
@@ -65,7 +66,7 @@ change:
 **Backend:** Python 3.12 · FastAPI · SQLAlchemy 2.x · Alembic · psycopg 3 ·
 pydantic-settings · uv
 **Database:** PostgreSQL 17 + pgvector 0.8.6, in Docker
-**Frontend:** React + TypeScript + Vite + Tailwind *(Milestone 3, not yet created)*
+**Frontend:** React + TypeScript + Vite + Tailwind, in `frontend/` (Milestone 9)
 **AI:** Ollama + open-source models, LangChain/LangGraph *(later milestones)*
 **Quality:** pytest · ruff · mypy (strict) · GitHub Actions
 
@@ -82,6 +83,7 @@ pydantic-settings · uv
 | Line endings normalized to **LF** via `.gitattributes` | CRLF breaks scripts inside Linux containers |
 | `models/` (SQLAlchemy) kept separate from `schemas/` (Pydantic) | What we store ≠ what we expose; prevents leaking password hashes |
 | **Async SQLAlchemy**, not sync | The AI milestones are I/O-bound (LLM calls take seconds); sync→async migration later would touch every DB file |
+| Frontend tokens in **localStorage**, not an httpOnly cookie | Unblocks M9 without backend changes to an already-complete, tested auth system. Known cost: XSS-reachable. Moving to Secure/httpOnly/SameSite cookies + CSRF is a deliberate future security-hardening milestone, not an oversight — see `backend/app/schemas/auth.py`'s `TokenResponse` docstring, which flags this exact trade-off. |
 
 ⚠️ **Async consequence — always eager-load relationships.** Accessing an
 unloaded relationship (`user.transactions`) outside an active async context
@@ -92,7 +94,7 @@ Lazy loading is not available to us.
 
 ## Commands
 
-Backend commands run from `backend/`.
+Backend commands run from `backend/`; frontend commands run from `frontend/`.
 
 ```bash
 # Database
@@ -114,6 +116,12 @@ uv run alembic history                        # revision chain
 uv run alembic revision --autogenerate -m "…" # draft from model diff — REVIEW IT
 uv run alembic upgrade head                   # apply
 uv run alembic downgrade -1                   # roll back one
+
+# Frontend (needs the backend running at http://localhost:8000 — see VITE_API_URL in .env.local)
+npm install
+npm run dev      # http://localhost:5173
+npm run build    # tsc -b && vite build
+npm run lint     # oxlint
 ```
 
 **Migration rules**

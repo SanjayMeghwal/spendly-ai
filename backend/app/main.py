@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.errors import validation_exception_handler
@@ -58,6 +59,19 @@ app = FastAPI(
     docs_url=None if settings.is_production else "/docs",
     redoc_url=None if settings.is_production else "/redoc",
     openapi_url=None if settings.is_production else "/openapi.json",
+)
+
+# Lets a browser-based frontend on a different origin (the Vite dev server,
+# or a deployed frontend's own domain) call this API at all - without this,
+# the browser blocks the request before it ever reaches a route.
+# allow_credentials=True because the Authorization header on every
+# authenticated request counts as a credential under CORS.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Health routes are mounted at the ROOT, not under API_V1_PREFIX. They are

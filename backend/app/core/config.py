@@ -102,6 +102,12 @@ class Settings(BaseSettings):
     # would let a stolen token be renewed forever.
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
 
+    # --- CORS -------------------------------------------------------------
+    # Origins allowed to call this API from a browser. The Vite dev server
+    # is the only one that matters locally; a deployed frontend origin
+    # overrides this via env, the same way DATABASE_URL does.
+    CORS_ORIGINS: list[str] = ["http://localhost:5173"]
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, value: SecretStr) -> SecretStr:
