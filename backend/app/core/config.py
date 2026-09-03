@@ -121,6 +121,26 @@ class Settings(BaseSettings):
     # edit.
     OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
 
+    # --- AI: chat (M11) ---------------------------------------------------------
+    # Groq hosts open models (Llama, ...) on its own inference hardware and
+    # exposes an OpenAI-compatible HTTP API - a plain httpx POST reaches it,
+    # the same way services/embedding.py already talks to Ollama. No new
+    # client library needed.
+    #
+    # Unlike OLLAMA_BASE_URL, this is a real secret with NO DEFAULT: a
+    # fallback here would be a published API key, since this file lives in a
+    # public repository. Free-tier key, generated at https://console.groq.com.
+    GROQ_API_KEY: SecretStr
+
+    # Verified live against Groq's actual catalog while building this
+    # feature - Groq's free-tier model lineup changes over time, and
+    # "llama-3.3-70b-versatile" (widely documented elsewhere) had already
+    # been retired by the time this was written. Confirm against
+    # https://api.groq.com/openai/v1/models before changing this. Unlike
+    # OLLAMA_EMBEDDING_MODEL, changing it needs no migration - it only
+    # affects generated text, not anything stored in the database.
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, value: SecretStr) -> SecretStr:
