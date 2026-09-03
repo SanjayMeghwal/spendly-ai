@@ -108,6 +108,19 @@ class Settings(BaseSettings):
     # overrides this via env, the same way DATABASE_URL does.
     CORS_ORIGINS: list[str] = ["http://localhost:5173"]
 
+    # --- AI: embeddings (M10) --------------------------------------------------
+    # Ollama runs as a local process, not a container - it isn't in
+    # docker-compose.yml. Defaults match a stock local install so dev needs no
+    # .env changes; a deployed environment overrides both via env, same as
+    # DATABASE_URL.
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+
+    # nomic-embed-text: a small (274MB) open embedding model, 768 dimensions.
+    # The transactions.embedding column's Vector(768) width is derived from
+    # this value - changing the model means a migration, not just a config
+    # edit.
+    OLLAMA_EMBEDDING_MODEL: str = "nomic-embed-text"
+
     @field_validator("SECRET_KEY")
     @classmethod
     def secret_key_must_be_strong(cls, value: SecretStr) -> SecretStr:

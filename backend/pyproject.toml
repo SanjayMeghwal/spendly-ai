@@ -50,6 +50,14 @@ dependencies = [
     # (UploadFile) - the CSV import endpoint. Without it, the request raises
     # at runtime, not at import time.
     "python-multipart>=0.0.17",
+    # Gives SQLAlchemy a Vector column type and distance operators for
+    # pgvector (the extension has shipped in the db container since M1,
+    # unused until now). Milestone 10 - transaction embeddings.
+    "pgvector>=0.5.0",
+    # Async HTTP client. Was dev-only (FastAPI's TestClient uses it under the
+    # hood); promoted to a runtime dependency in M10 because
+    # services/embedding.py uses it to call Ollama's local HTTP API.
+    "httpx>=0.28.0",
 ]
 
 # ------------------------------------------------------------------------------
@@ -60,7 +68,8 @@ dependencies = [
 dev = [
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
-    "httpx>=0.28.0",       # required by FastAPI's TestClient
+    # httpx itself moved to runtime dependencies (M10); still needed here as
+    # a dev dep because that's what FastAPI's TestClient uses under the hood.
     "ruff>=0.8.0",         # linter + formatter (replaces flake8/black/isort)
     "mypy>=1.13.0",        # static type checker
     "pytest-asyncio>=0.24.0",

@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Transaction
 from app.services.category import list_categories
+from app.services.embedding import embed_transaction_or_none
 
 
 class ImportRow(NamedTuple):
@@ -76,7 +77,7 @@ async def import_transactions(
     for why categories stay something a user deliberately names.
     """
     categories = await list_categories(session, user_id=user_id)
-    category_ids_by_lower_name = {category.name.lower(): category.id for category in categories}
+    categories_by_lower_name = {category.name.lower(): category for category in categories}
 
     dates = {row.occurred_at for row in rows}
     seen: set[tuple[datetime, Decimal, str]] = set()
@@ -97,8 +98,19 @@ async def import_transactions(
             continue
         seen.add(key)
 
-        category_id = (
-            category_ids_by_lower_name.get(row.category_name.lower()) if row.category_name else None
+        matched_category = (
+            categories_by_lower_name.get(row.category_name.lower()) if row.category_name else None
+        )
+        # One embed_text call per row, awaited in the loop rather than
+        # batched with asyncio.gather - simplest correct version for now.
+        # A large CSV would embed sequentially, which is slow but never
+        # wrong; worth revisiting if import time on real files becomes a
+        # problem. embed_transaction_or_none never raises, so a row is
+        # never dropped just because Ollama had a bad moment.
+        embedding = await embed_transaction_or_none(
+            description=row.description,
+            amount=row.amount,
+            category_name=matched_category.name if matched_category else None,
         )
         to_insert.append(
             Transaction(
@@ -106,7 +118,8 @@ async def import_transactions(
                 amount=row.amount,
                 description=row.description,
                 occurred_at=row.occurred_at,
-                category_id=category_id,
+                category_id=matched_category.id if matched_category else None,
+                embedding=embedding,
             )
         )
 

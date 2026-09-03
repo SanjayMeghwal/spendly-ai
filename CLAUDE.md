@@ -23,7 +23,7 @@ See "Working style" below — it is not optional.
 
 | | |
 |---|---|
-| Milestone | **9 — Frontend MVP** — complete |
+| Milestone | **10 — AI: embeddings + retrieval** — complete |
 | Done (M1) | git hygiene · uv deps · Postgres+pgvector container · validated config · async engine + session · FastAPI app · liveness/readiness probes · Alembic (baseline) · CI |
 | Done (M2) | User + RefreshToken models · 3 migrations · Argon2id hashing · JWT access tokens · refresh rotation with reuse detection · logout · logout-all via `token_version` · `/me` · tests (210, 99%) |
 | Done (M3) | Transaction model (signed `NUMERIC(12,2)`) · full CRUD, every query scoped by `user_id` · pagination · partial updates via `exclude_unset` |
@@ -33,14 +33,15 @@ See "Working style" below — it is not optional.
 | Done (M7) | Reporting API — no model/migration, pure aggregation over `transactions`/`categories` · `GET /reports/spend-by-category` (net spend per category, one calendar month, largest first, synthetic "Uncategorized" bucket) · `GET /reports/monthly-summary` (income/expenses/net for the last N months, default 6, zero-filled for quiet months) · no dedicated balance-trend endpoint — client derives it via cumulative sum · tests (492, 99%) |
 | Done (M8) | CSV import — no model/migration, ordinary `Transaction` rows · `POST /transactions/import` (fixed `date,amount,description,category` schema, `python-multipart` dependency) · best-effort per-row validation (invalid rows reported back, never block the rest of the file) · de-dup on `(occurred_at, amount, description)` against the database and within the same file · category matched case-insensitively against the caller's existing categories only, nothing auto-created · tests (508, 99%) |
 | Done (M9) | Frontend MVP — `frontend/`, React + TypeScript + Vite + Tailwind · CORS added on the backend for the Vite dev origin · TanStack Query + a thin `apiRequest` fetch wrapper with transparent access-token refresh-on-401 (concurrent refreshes deduped) · tokens in `localStorage`, not an httpOnly cookie — a deliberate, documented, revisitable trade-off · auth screens (register auto-logs-in, login, protected routes) · full CRUD screens for transactions, categories, budgets, goals · a reporting dashboard on M7's endpoints (KPI tiles, income/expenses trend chart, spend-by-category ranked bars), colors chosen and validated per the dataviz skill · every screen browser-verified by hand, not just build/lint-checked · CSV import has no frontend UI yet — deferred, not missed |
-| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` `POST /transactions/import` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · `POST/GET /goals` `GET/PATCH/DELETE /goals/{id}` · `GET /reports/spend-by-category` `GET /reports/monthly-summary` · health probes |
-| Next | **Milestone 10 — AI: embeddings + retrieval**: Ollama + pgvector (provisioned since M1, unused until now) — embed a user's financial data, build retrieval over it |
+| Done (M10) | AI: embeddings + retrieval — `pgvector` (Python) + `httpx` deps · nullable `Vector(768)` `embedding` column on `transactions` (Alembic migration hand-fixed: autogenerate can't emit `CREATE EXTENSION` or see the `pgvector` import it needs) · `OLLAMA_BASE_URL`/`OLLAMA_EMBEDDING_MODEL` config, `nomic-embed-text` pulled locally · `services/embedding.py`'s `embed_text` wraps Ollama's HTTP API · embeddings generated synchronously on `POST /transactions` and CSV import via `embed_transaction_or_none`, deliberately **fail-soft** (logs and returns `None`, never blocks the write) since Ollama runs as a bare local process outside `docker-compose.yml` and can be down without anyone noticing · `scripts/backfill_embeddings.py` sweeps rows still missing one (run as `python -m scripts.backfill_embeddings`, not by path) · `GET /transactions/search?q=` embeds the query and ranks by pgvector cosine distance, scoped by `user_id`, excluding un-embedded rows · search itself is NOT fail-soft — no query vector means nothing to rank, so `EmbeddingError` becomes a 503 · every piece verified against the real local Ollama, not just mocks · tests (535, 99%) mock Ollama via an autouse `httpx.MockTransport` stub, the same tier as any other external/LLM call |
+| Endpoints | `POST /register` `/login` `/refresh` `/logout` `/logout-all` · `GET /me` · `POST/GET /transactions` `GET/PATCH/DELETE /transactions/{id}` `POST /transactions/import` `GET /transactions/search` · `POST/GET /budgets` `GET/PATCH/DELETE /budgets/{id}` · `POST/GET /categories` `GET/PATCH/DELETE /categories/{id}` · `POST/GET /goals` `GET/PATCH/DELETE /goals/{id}` · `GET /reports/spend-by-category` `GET /reports/monthly-summary` · health probes |
+| Next | **Milestone 11 — AI: RAG chat**: natural-language Q&A over a user's finances — backend endpoint + chat UI, built on M10's embeddings/retrieval |
 
 ---
 
 ## Roadmap (M10+)
 
-Sketched 2026-08-31, not yet started past M9. Sized to match M1–M8's own
+Sketched 2026-08-31, not yet started past M10. Sized to match M1–M8's own
 granularity — one coherent resource or capability per milestone. Revisit
 before starting each one; this is a plan, not a commitment.
 
@@ -67,7 +68,7 @@ change:
 pydantic-settings · uv
 **Database:** PostgreSQL 17 + pgvector 0.8.6, in Docker
 **Frontend:** React + TypeScript + Vite + Tailwind, in `frontend/` (Milestone 9)
-**AI:** Ollama + open-source models, LangChain/LangGraph *(later milestones)*
+**AI:** Ollama (`nomic-embed-text`, local) for embeddings, since M10 · LangChain/LangGraph *(later milestones)*
 **Quality:** pytest · ruff · mypy (strict) · GitHub Actions
 
 ---
@@ -84,6 +85,7 @@ pydantic-settings · uv
 | `models/` (SQLAlchemy) kept separate from `schemas/` (Pydantic) | What we store ≠ what we expose; prevents leaking password hashes |
 | **Async SQLAlchemy**, not sync | The AI milestones are I/O-bound (LLM calls take seconds); sync→async migration later would touch every DB file |
 | Frontend tokens in **localStorage**, not an httpOnly cookie | Unblocks M9 without backend changes to an already-complete, tested auth system. Known cost: XSS-reachable. Moving to Secure/httpOnly/SameSite cookies + CSRF is a deliberate future security-hardening milestone, not an oversight — see `backend/app/schemas/auth.py`'s `TokenResponse` docstring, which flags this exact trade-off. |
+| Embedding a transaction is **fail-soft** (create/import never blocks on Ollama); embedding a search **query** is **fail-hard** (503) | A transaction row is fully valid with no embedding — it just won't surface in search until a backfill catches it up. A search has nothing to rank without a query vector, so there is no equivalent fallback. Ollama runs as a bare local process outside `docker-compose.yml`, so it can be down without anyone noticing — this asymmetry is deliberate, not inconsistent. See `services/embedding.py`. |
 
 ⚠️ **Async consequence — always eager-load relationships.** Accessing an
 unloaded relationship (`user.transactions`) outside an active async context

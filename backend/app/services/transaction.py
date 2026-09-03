@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Transaction
 from app.services.category import CategoryNotFound, get_category
+from app.services.embedding import embed_transaction_or_none
 
 # Sentinel distinguishing "the caller did not mention this field" from "the
 # caller sent it as null". PATCH needs both: category_id and notes are
@@ -41,6 +42,24 @@ async def _check_category_id(
         raise CategoryNotFound(category_id)
 
 
+async def _resolve_category_name(
+    session: AsyncSession, *, user_id: uuid.UUID, category_id: uuid.UUID | None
+) -> str | None:
+    """Validate category_id the same way _check_category_id does, but also
+    hand back the category's name - embedding text wants it, and this way
+    the category table is only queried once instead of twice.
+
+    Raises:
+        CategoryNotFound: category_id doesn't belong to user_id.
+    """
+    if category_id is None:
+        return None
+    category = await get_category(session, user_id=user_id, category_id=category_id)
+    if category is None:
+        raise CategoryNotFound(category_id)
+    return category.name
+
+
 async def create_transaction(
     session: AsyncSession,
     *,
@@ -56,7 +75,10 @@ async def create_transaction(
     Raises:
         CategoryNotFound: category_id doesn't belong to user_id.
     """
-    await _check_category_id(session, user_id=user_id, category_id=category_id)
+    category_name = await _resolve_category_name(session, user_id=user_id, category_id=category_id)
+    embedding = await embed_transaction_or_none(
+        description=description, amount=amount, category_name=category_name
+    )
     transaction = Transaction(
         user_id=user_id,
         amount=amount,
@@ -64,6 +86,7 @@ async def create_transaction(
         occurred_at=occurred_at,
         category_id=category_id,
         notes=notes,
+        embedding=embedding,
     )
     session.add(transaction)
     await session.commit()
@@ -117,6 +140,38 @@ async def get_transaction(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def search_transactions(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    query_embedding: list[float],
+    limit: int,
+) -> list[Transaction]:
+    """Return this user's transactions most semantically similar to
+    query_embedding, closest match first.
+
+    Cosine distance (pgvector's `<=>` operator, via .cosine_distance() -
+    see pgvector.sqlalchemy.vector.VECTOR.Comparator) rather than L2:
+    cosine cares about the DIRECTION two vectors point, not their
+    magnitude, which is the right notion of "similar meaning" for text
+    embeddings - two descriptions of the same kind of purchase should
+    match regardless of how strongly-worded either one is.
+
+    Rows with no embedding yet - not backfilled, or Ollama was down when
+    they were created/imported, see embed_transaction_or_none - are
+    excluded rather than ranked last. There is no distance to compute
+    against a NULL vector, and asking PostgreSQL to order by one would
+    error, not merely rank it poorly.
+    """
+    result = await session.execute(
+        select(Transaction)
+        .where(Transaction.user_id == user_id, Transaction.embedding.is_not(None))
+        .order_by(Transaction.embedding.cosine_distance(query_embedding))
+        .limit(limit)
+    )
+    return list(result.scalars().all())
 
 
 async def update_transaction(
