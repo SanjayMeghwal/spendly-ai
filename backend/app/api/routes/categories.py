@@ -13,6 +13,8 @@ import uuid
 from fastapi import APIRouter, HTTPException, Query, status
 
 from app.api.deps import CurrentUser, DbSession
+from app.schemas.category_suggest import CategorySuggestRequest, CategorySuggestResponse
+from app.services.langgraph.categorizer import categoriser
 from app.schemas.category import CategoryCreate, CategoryRead, CategoryUpdate
 from app.services.category import (
     CategoryInUse,
@@ -205,3 +207,25 @@ async def delete(
         raise _in_use(exc) from None
     if not deleted:
         raise _not_found()
+
+
+@router.post(
+    "/suggest",
+    status_code=status.HTTP_200_OK,
+    response_model=CategorySuggestResponse,
+    summary="Suggest a category for a new transaction",
+)
+async def suggest_category(
+    payload: CategorySuggestRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> CategorySuggestResponse:
+    """Invoke the LangGraph categoriser for this transaction."""
+    state = {
+        "user_id": current_user.id,
+        "description": payload.description,
+        "amount": payload.amount,
+    }
+    result = await categoriser.invoke(state)
+    return CategorySuggestResponse(suggested_category=result.get("suggested_category"))
+

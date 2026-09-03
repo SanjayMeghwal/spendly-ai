@@ -31,6 +31,7 @@ dependencies = [
     # ProactorEventLoop, which uvicorn installs after importing the app -
     # overriding any loop policy the app sets. See CLAUDE.md "Known gotchas".
     "asyncpg>=0.31.0",
+    "langgraph>=0.2.3",
     # Configuration: validate environment variables at startup, not at 3am
     "pydantic-settings>=2.6.0",
     # Backs pydantic's EmailStr. Validating an address by regex is famously
