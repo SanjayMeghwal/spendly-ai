@@ -80,7 +80,7 @@ def _invalid_category() -> HTTPException:
     )
 
 
-def _to_read_model(
+def to_read_model(
     transaction: Transaction, category_names: dict[uuid.UUID, str]
 ) -> TransactionRead:
     """Attach the denormalized category name to a transaction row.
@@ -136,7 +136,7 @@ async def create(
     category_names = await get_category_names(
         db, user_id=current_user.id, category_ids=category_ids
     )
-    return _to_read_model(transaction, category_names)
+    return to_read_model(transaction, category_names)
 
 
 _REQUIRED_CSV_COLUMNS = {"date", "amount", "description"}
@@ -293,7 +293,7 @@ async def list_mine(
     category_names = await get_category_names(
         db, user_id=current_user.id, category_ids=category_ids
     )
-    return [_to_read_model(t, category_names) for t in transactions]
+    return [to_read_model(t, category_names) for t in transactions]
 
 
 @router.get(
@@ -338,7 +338,7 @@ async def search(
     category_names = await get_category_names(
         db, user_id=current_user.id, category_ids=category_ids
     )
-    return [_to_read_model(t, category_names) for t in transactions]
+    return [to_read_model(t, category_names) for t in transactions]
 
 
 @router.get(
@@ -360,7 +360,7 @@ async def get_one(
     category_names = await get_category_names(
         db, user_id=current_user.id, category_ids=category_ids
     )
-    return _to_read_model(transaction, category_names)
+    return to_read_model(transaction, category_names)
 
 
 @router.patch(
@@ -401,7 +401,7 @@ async def update(
     category_names = await get_category_names(
         db, user_id=current_user.id, category_ids=category_ids
     )
-    return _to_read_model(transaction, category_names)
+    return to_read_model(transaction, category_names)
 
 
 @router.delete(
