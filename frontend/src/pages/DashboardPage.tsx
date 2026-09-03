@@ -59,6 +59,9 @@ export function DashboardPage() {
         <Link to="/goals" className="text-slate-900 underline">
           Goals
         </Link>
+        <Link to="/chat" className="text-slate-900 underline">
+          Chat
+        </Link>
       </nav>
 
       {currentMonth && (

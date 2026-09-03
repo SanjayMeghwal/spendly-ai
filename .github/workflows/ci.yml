@@ -68,6 +68,10 @@ jobs:
       # that exist only inside this job and are destroyed with the runner.
       # The production key belongs in repository secrets, as ${{ secrets.X }}.
       SECRET_KEY: ci_only_signing_key_not_used_anywhere_else
+      # Also required for the app to start (M11). Tests mock every Groq HTTP
+      # call - see the Ollama mock precedent from M10 - so this value is never
+      # sent to Groq; it only needs to be present and non-empty.
+      GROQ_API_KEY: ci_only_key_never_sent_to_groq
 
     steps:
       - name: Check out repository
