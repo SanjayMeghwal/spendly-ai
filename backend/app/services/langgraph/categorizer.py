@@ -14,7 +14,7 @@ chain our existing services (`embed_text`, `search_transactions`,
 import uuid
 from decimal import Decimal
 
-from langgraph.graph import StateGraph, CompiledGraph
+from langgraph.graph import StateGraph
 
 from app.services.embedding import embed_text
 from app.services.transaction import search_transactions, _resolve_category_name  # used only for possible future extensions
@@ -86,7 +86,7 @@ async def ask_gpt(state: dict) -> dict:
     return state
 
 
-def build_categoriser_graph() -> CompiledGraph:
+def build_categoriser_graph():
     workflow = StateGraph(dict)
 
     workflow.add_node("embed", embed_description)
