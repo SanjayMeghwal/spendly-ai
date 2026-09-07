@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { listCategories } from '../api/categories'
-import { ApiError } from '../api/client'
+import { ApiError, apiRequest } from '../api/client'
 import {
   createTransaction,
   deleteTransaction,
@@ -21,7 +21,13 @@ function formatAmount(amount: string): string {
   return value < 0 ? `-$${formatMoney(amount.replace('-', ''))}` : `$${formatMoney(amount)}`
 }
 
-export function TransactionsPage() {
+interface CategorizationResponse {
+  category_id: string | null
+  category_name: string
+  confidence: number
+  reason: string
+}
+  export function TransactionsPage() {
   const queryClient = useQueryClient()
   const [offset, setOffset] = useState(0)
   const [formTarget, setFormTarget] = useState<'create' | Transaction | null>(null)
@@ -187,6 +193,18 @@ export function TransactionsPage() {
             error={formError}
             onSubmit={handleSubmit}
             onCancel={() => setFormTarget(null)}
+            onSuggestCategory={async (description, amount) => {
+              try {
+                const response = await apiRequest<CategorizationResponse>('/agents/categorize', {
+                  method: 'POST',
+                  body: { description, amount },
+                })
+                return response.category_name || null
+              } catch (e) {
+                console.error('Agent categorization failed', e)
+                return null
+              }
+            }}
           />
         </div>
       )}
