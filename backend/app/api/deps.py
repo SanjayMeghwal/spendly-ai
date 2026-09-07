@@ -177,3 +177,16 @@ async def get_current_user(credentials: BearerToken, db: DbSession) -> User:
 # there is no separate decorator or middleware to remember, and forgetting it
 # leaves the endpoint public in a way that is visible in the signature itself.
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+# Rate‑limit dependency for AI‑heavy endpoints.
+from app.core.rate_limit import ai_rate_limiter
+
+async def enforce_ai_rate_limit(current_user: CurrentUser, settings: SettingsDep) -> None:
+    """Limit authenticated calls that invoke embedding or generation services."""
+    await ai_rate_limiter.check(
+        current_user.id,
+        limit=settings.AI_RATE_LIMIT_REQUESTS,
+        window_seconds=settings.AI_RATE_LIMIT_WINDOW_SECONDS,
+    )
+
+AiRateLimit = Annotated[None, Depends(enforce_ai_rate_limit)]
